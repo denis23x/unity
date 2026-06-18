@@ -64,7 +64,6 @@ namespace ProjectName.EditorTools
         bool markStatic;
         bool overwrite;
         bool unpackPrefab;
-        bool previewOnly;
         string sceneNamePrefix;
 
         Vector2 scroll;
@@ -85,7 +84,6 @@ namespace ProjectName.EditorTools
             markStatic      = EditorPrefs.GetBool(PK + nameof(markStatic),    true);
             overwrite       = EditorPrefs.GetBool(PK + nameof(overwrite),     true);
             unpackPrefab    = EditorPrefs.GetBool(PK + nameof(unpackPrefab),  false);
-            previewOnly     = false;
             sceneNamePrefix = EditorPrefs.GetString(PK + nameof(sceneNamePrefix), "Chunk_");
         }
 
@@ -148,19 +146,8 @@ namespace ProjectName.EditorTools
             EditorGUILayout.Space();
             using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sourceFolder) || string.IsNullOrWhiteSpace(destFolder)))
             {
-                EditorGUILayout.BeginHorizontal();
-                if (GUILayout.Button("Preview positions (log only)", GUILayout.Height(28)))
-                {
-                    previewOnly = true;
-                    Run();
-                    previewOnly = false;
-                }
                 if (GUILayout.Button("Scan & import", GUILayout.Height(28)))
-                {
-                    previewOnly = false;
                     Run();
-                }
-                EditorGUILayout.EndHorizontal();
             }
 
             EditorGUILayout.EndScrollView();
@@ -177,7 +164,7 @@ namespace ProjectName.EditorTools
                 return;
             }
 
-            if (!previewOnly && !AssetDatabase.IsValidFolder(destFolder))
+            if (!AssetDatabase.IsValidFolder(destFolder))
             {
                 Directory.CreateDirectory(destFolder);
                 AssetDatabase.Refresh();
@@ -214,9 +201,9 @@ namespace ProjectName.EditorTools
             Debug.Log($"[ChunkImporter] {entries.Count} FBX files; " +
                       $"grid a:{minA}..{maxA} ({countA}), b:{minB}..{maxB} ({countB}); " +
                       $"cell={chunkSize}m; pivot={pivotMode}; axis={axis}; idxOrder={indexOrder}; " +
-                      $"invertU={invertU}, invertV={invertV}; preview={previewOnly}");
+                      $"invertU={invertU}, invertV={invertV}");
 
-            if (!previewOnly && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
             {
                 Debug.LogWarning("[ChunkImporter] Aborted by user (unsaved scenes).");
                 return;
@@ -230,7 +217,7 @@ namespace ProjectName.EditorTools
                 for (int i = 0; i < entries.Count; i++)
                 {
                     var e = entries[i];
-                    EditorUtility.DisplayProgressBar(previewOnly ? "Previewing chunks" : "Importing chunks",
+                    EditorUtility.DisplayProgressBar("Importing chunks",
                         $"{e.a:00}_{e.b:00}  ({i + 1}/{entries.Count})",
                         (float)i / entries.Count);
 
@@ -241,23 +228,17 @@ namespace ProjectName.EditorTools
             finally
             {
                 EditorUtility.ClearProgressBar();
-                if (!previewOnly && prevActive.IsValid() && prevActive.isLoaded)
+                if (prevActive.IsValid() && prevActive.isLoaded)
                     EditorSceneManager.SetActiveScene(prevActive);
             }
 
-            if (!previewOnly)
-            {
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
-            }
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
 
-            string action = previewOnly ? "previewed" : "written";
-            Debug.Log($"[ChunkImporter] DONE. {written}/{entries.Count} scenes {action}" +
-                      (previewOnly ? "." : $" to {destFolder}."));
+            Debug.Log($"[ChunkImporter] DONE. {written}/{entries.Count} scenes written to {destFolder}.");
 
-            if (!previewOnly)
-                EditorUtility.DisplayDialog("Chunk Importer",
-                    $"Done.\n{written}/{entries.Count} scenes written to:\n{destFolder}", "OK");
+            EditorUtility.DisplayDialog("Chunk Importer",
+                $"Done.\n{written}/{entries.Count} scenes written to:\n{destFolder}", "OK");
         }
 
         bool ImportOne(Entry e, int minA, int minB, int countA, int countB)
@@ -319,13 +300,6 @@ namespace ProjectName.EditorTools
 
             string baseName  = $"{sceneNamePrefix}{e.a:00}_{e.b:00}";
             string scenePath = $"{destFolder}/{baseName}.unity";
-
-            // Preview mode: just log positions, no file IO.
-            if (previewOnly)
-            {
-                Debug.Log($"[ChunkImporter PREVIEW] {baseName}  →  root @ ({rootPos.x:F1}, {rootPos.y:F1}, {rootPos.z:F1})  [col={col}, row={row}]");
-                return true;
-            }
 
             if (File.Exists(scenePath) && !overwrite)
             {
