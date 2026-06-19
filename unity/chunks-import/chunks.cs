@@ -13,12 +13,19 @@
 //   Chunk_00_00 → root @ (-350, 0, -350)
 //   Chunk_07_07 → root @ ( 350, 0,  350)
 //
-// IMPORTANT: each FBX is reimported with ModelImporter.bakeAxisConversion=true.
-// This bakes the Blender Z-up → Y-up rotation into the mesh data, so the
-// instantiated FBX has an identity local transform and no compensating rotation
-// on the root. Without baking, use_space_transform=True leaves a root rotation
-// whose direction depends on Blender's runtime export state and produces a
-// 180° horizontal flip of the chunk content in Unity.
+// Mesh-bake pipeline:
+//   Blender's FBX export gives every instantiated chunk a non-identity local
+//   transform on the FBX root (typically scale=100 and a -90°X rotation). The
+//   transform is what makes the mesh data render in Unity coordinates; wiping
+//   it directly lays the chunks on their side. To get clean identity TRS in
+//   the Inspector we bake the transform into a fresh copy of each MeshFilter's
+//   mesh (vertices, normals, tangents, and winding if the matrix is a
+//   reflection), and only THEN reset every Transform in the inst subtree to
+//   identity. The baked meshes are NOT written out as separate .asset files —
+//   they stay in memory and Unity serialises them inline inside the .unity
+//   scene when SaveScene runs. Each chunk has unique geometry so inlining
+//   avoids both Project-window clutter and any duplication concern. The
+//   original FBX is left untouched and can still be re-imported normally.
 //
 // Menu: Tools → Chunks → Import FBX → Scenes
 
@@ -311,10 +318,13 @@ namespace ProjectName.EditorTools
             // rotation on the FBX root. Without this, the use_space_transform=True
             // export produces a root rotation that lands the chunk content
             // mirrored 180° on the horizontal plane.
+            // Also force isReadable=true so the bake step below can read mesh
+            // vertex data at edit time.
             var modelImporter = AssetImporter.GetAtPath(e.assetPath) as ModelImporter;
-            if (modelImporter != null && !modelImporter.bakeAxisConversion)
+            if (modelImporter != null && (!modelImporter.bakeAxisConversion || !modelImporter.isReadable))
             {
                 modelImporter.bakeAxisConversion = true;
+                modelImporter.isReadable = true;
                 modelImporter.SaveAndReimport();
             }
 
@@ -329,18 +339,16 @@ namespace ProjectName.EditorTools
 
             var inst = (GameObject)PrefabUtility.InstantiatePrefab(fbx, scene);
             inst.transform.SetParent(root.transform, worldPositionStays: false);
-
-            // Only reset localPosition. Do NOT touch localRotation or localScale:
-            // when bakeAxisConversion fails to actually bake (which happens with
-            // Blender FBX exports that use use_space_transform=True together with
-            // bake_space_transform=False), the axis conversion lives on the FBX
-            // root rotation rather than in mesh data. Wiping that rotation lays
-            // the chunk on its side — for single-mesh FBX files, the root IS the
-            // mesh, so the plane ends up edge-on to the camera and invisible.
             inst.transform.localPosition = Vector3.zero;
 
-            if (unpackPrefab)
-                PrefabUtility.UnpackPrefabInstance(inst, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+            // The bake step replaces every MeshFilter's mesh with a fresh copy
+            // and then wipes all local TRS to identity. Unpacking is mandatory
+            // here because we're swapping out prefab-owned references; leaving
+            // the prefab connection would either reject the mesh override or
+            // revert it on the next FBX reimport.
+            PrefabUtility.UnpackPrefabInstance(inst, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+
+            BakeChunkToIdentity(root, inst, baseName);
 
             if (markStatic)
             {
@@ -363,5 +371,117 @@ namespace ProjectName.EditorTools
 
             return ok;
         }
+
+        // ── Mesh bake pipeline ──────────────────────────────────────────────
+        // The FBX import preserves the Blender→Unity coordinate compensation as
+        // a non-identity local transform on the instantiated GameObject. The
+        // methods below rewrite each MeshFilter's mesh so the vertex data lives
+        // in the chunk root's local space, allowing every Transform under inst
+        // to be reset to identity without changing what's rendered.
+
+        void BakeChunkToIdentity(GameObject root, GameObject inst, string baseName)
+        {
+            var meshFilters = inst.GetComponentsInChildren<MeshFilter>(includeInactive: true);
+
+            // Snapshot the world matrices BEFORE mutating any Transform — once
+            // we start writing identity onto parents, the children's
+            // localToWorldMatrix would change underneath us.
+            var rootInverse = root.transform.worldToLocalMatrix;
+            var bakeMatrices = new Matrix4x4[meshFilters.Length];
+            for (int i = 0; i < meshFilters.Length; i++)
+                bakeMatrices[i] = rootInverse * meshFilters[i].transform.localToWorldMatrix;
+
+            for (int i = 0; i < meshFilters.Length; i++)
+            {
+                var mf = meshFilters[i];
+                var source = mf.sharedMesh;
+                if (source == null) continue;
+
+                if (!source.isReadable)
+                {
+                    Debug.LogWarning($"[ChunkImporter] {baseName}: source mesh '{source.name}' is not readable; skipping bake for this filter.");
+                    continue;
+                }
+
+                var baked = BakeMeshThroughMatrix(source, bakeMatrices[i]);
+                baked.name = $"{source.name}_baked";
+
+                // No CreateAsset call — leaving the mesh as a scene-owned
+                // object makes SaveScene serialise its data inline into the
+                // .unity file, so no extra .asset clutter is produced.
+                mf.sharedMesh = baked;
+            }
+
+            // Every MeshFilter now references a mesh whose vertices are in
+            // root-local space, so collapsing every Transform under inst to
+            // identity leaves the rendered geometry unchanged.
+            foreach (var t in inst.GetComponentsInChildren<Transform>(includeInactive: true))
+            {
+                t.localPosition = Vector3.zero;
+                t.localRotation = Quaternion.identity;
+                t.localScale    = Vector3.one;
+            }
+        }
+
+        static Mesh BakeMeshThroughMatrix(Mesh source, Matrix4x4 matrix)
+        {
+            var mesh = new Mesh();
+            if (source.vertexCount > 65535)
+                mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+
+            var vertices = source.vertices;
+            for (int i = 0; i < vertices.Length; i++)
+                vertices[i] = matrix.MultiplyPoint3x4(vertices[i]);
+            mesh.vertices = vertices;
+
+            var normals = source.normals;
+            if (normals != null && normals.Length > 0)
+            {
+                // Uniform-scale + rotation: MultiplyVector + normalize gives the
+                // right direction. Chunks don't use shear so we don't need the
+                // full inverse-transpose.
+                for (int i = 0; i < normals.Length; i++)
+                    normals[i] = matrix.MultiplyVector(normals[i]).normalized;
+                mesh.normals = normals;
+            }
+
+            var tangents = source.tangents;
+            if (tangents != null && tangents.Length > 0)
+            {
+                for (int i = 0; i < tangents.Length; i++)
+                {
+                    var dir = matrix.MultiplyVector((Vector3)tangents[i]).normalized;
+                    tangents[i] = new Vector4(dir.x, dir.y, dir.z, tangents[i].w);
+                }
+                mesh.tangents = tangents;
+            }
+
+            var uv  = source.uv;     if (uv.Length  > 0) mesh.uv  = uv;
+            var uv2 = source.uv2;    if (uv2.Length > 0) mesh.uv2 = uv2;
+            var uv3 = source.uv3;    if (uv3.Length > 0) mesh.uv3 = uv3;
+            var uv4 = source.uv4;    if (uv4.Length > 0) mesh.uv4 = uv4;
+            var colors = source.colors; if (colors.Length > 0) mesh.colors = colors;
+
+            // Reflections (negative-determinant matrices, e.g. an axis-swap)
+            // invert winding; reverse triangle order so front-face culling
+            // still renders the right side. Uniform positive scale + rotation
+            // keeps winding intact.
+            bool flipWinding = matrix.determinant < 0f;
+            mesh.subMeshCount = source.subMeshCount;
+            for (int sm = 0; sm < source.subMeshCount; sm++)
+            {
+                var tris = source.GetTriangles(sm);
+                if (flipWinding)
+                {
+                    for (int i = 0; i < tris.Length; i += 3)
+                        (tris[i + 1], tris[i + 2]) = (tris[i + 2], tris[i + 1]);
+                }
+                mesh.SetTriangles(tris, sm);
+            }
+
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
     }
 }
