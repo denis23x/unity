@@ -141,7 +141,7 @@ namespace ProjectName.EditorTools
             using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sourceFolder) || string.IsNullOrWhiteSpace(destFolder)))
             {
                 if (GUILayout.Button("Scan & import", GUILayout.Height(28)))
-                    Run();
+                    EditorApplication.delayCall += Run;
             }
 
             EditorGUILayout.EndScrollView();
@@ -330,12 +330,14 @@ namespace ProjectName.EditorTools
             var inst = (GameObject)PrefabUtility.InstantiatePrefab(fbx, scene);
             inst.transform.SetParent(root.transform, worldPositionStays: false);
 
-            // With bakeAxisConversion=true the FBX root rotation is baked into
-            // the mesh, so a clean identity local transform on the instance is
-            // safe and the chunk lands exactly at the root's world position.
+            // Only reset localPosition. Do NOT touch localRotation or localScale:
+            // when bakeAxisConversion fails to actually bake (which happens with
+            // Blender FBX exports that use use_space_transform=True together with
+            // bake_space_transform=False), the axis conversion lives on the FBX
+            // root rotation rather than in mesh data. Wiping that rotation lays
+            // the chunk on its side — for single-mesh FBX files, the root IS the
+            // mesh, so the plane ends up edge-on to the camera and invisible.
             inst.transform.localPosition = Vector3.zero;
-            inst.transform.localRotation = Quaternion.identity;
-            inst.transform.localScale    = Vector3.one;
 
             if (unpackPrefab)
                 PrefabUtility.UnpackPrefabInstance(inst, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);

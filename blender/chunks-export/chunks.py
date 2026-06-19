@@ -222,6 +222,16 @@ for src in to_slice:
         # Remove duplicate vertices before cutting to avoid t-junction seams.
         bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0001)
 
+    # Snapshot each face's outward normal BEFORE bisecting. The custom face
+    # layer is propagated by bisect_plane to the child faces it produces, so
+    # after the cuts every fragment still carries the direction its parent
+    # face had in the source mesh. We use this snapshot at the end of the
+    # pipeline to re-flip any fragment whose winding ended up reversed.
+    bm.normal_update()
+    ref_normal = bm.faces.layers.float_vector.new("__ref_normal")
+    for f in bm.faces:
+        f[ref_normal] = f.normal.copy()
+
     # Bisect along each vertical (X-aligned) boundary plane between columns.
     # bisect_plane with clear_inner/clear_outer=False keeps both halves;
     # faces will be separated into buckets by their centre point afterwards.
@@ -244,7 +254,16 @@ for src in to_slice:
         )
 
     if RECALC_NORMALS:
-        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        # Do NOT use bmesh.ops.recalc_face_normals here: it assumes a closed
+        # volume and on open ribbons (roads, fences, terrain strips) it flips
+        # arbitrary subsets of faces, which is exactly the bug we want to
+        # avoid. Instead, restore each face to the direction we snapshotted
+        # before the bisect cuts. If the current normal points opposite to
+        # the stored reference, flip the face's winding.
+        bm.normal_update()
+        for f in bm.faces:
+            if f.normal.dot(f[ref_normal]) < 0.0:
+                f.normal_flip()
 
     bm.faces.ensure_lookup_table()
     bm.verts.ensure_lookup_table()
