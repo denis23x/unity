@@ -7,16 +7,18 @@
 // Mapping between Blender export and Unity:
 //   Blender +X → Unity +X         (column index, first in filename, cx)
 //   Blender +Y → Unity +Z         (row index, second in filename, cy)
-//   Blender +Z → Unity +Y         (up; handled by FBX root rotation, DO NOT override)
+//   Blender +Z → Unity +Y         (up)
 //
 // Example for 8×8 grid, 100 m cells (chunk geometry centered in FBX):
 //   Chunk_00_00 → root @ (-350, 0, -350)
 //   Chunk_07_07 → root @ ( 350, 0,  350)
 //
-// IMPORTANT: when the source FBX was exported with use_space_transform=True
-// and bake_space_transform=False (standard Unity preset), the FBX root carries
-// a non-identity rotation that converts Blender Z-up to Unity Y-up. The script
-// PRESERVES that rotation. Only the FBX child's localPosition is reset to zero.
+// IMPORTANT: each FBX is reimported with ModelImporter.bakeAxisConversion=true.
+// This bakes the Blender Z-up → Y-up rotation into the mesh data, so the
+// instantiated FBX has an identity local transform and no compensating rotation
+// on the root. Without baking, use_space_transform=True leaves a root rotation
+// whose direction depends on Blender's runtime export state and produces a
+// 180° horizontal flip of the chunk content in Unity.
 //
 // Menu: Tools → Chunks → Import FBX → Scenes
 
@@ -59,8 +61,6 @@ namespace ProjectName.EditorTools
         PivotMode pivotMode;
         AxisLayout axis;
         IndexOrder indexOrder;
-        bool invertU;
-        bool invertV;
         bool markStatic;
         bool overwrite;
         bool unpackPrefab;
@@ -79,8 +79,6 @@ namespace ProjectName.EditorTools
             pivotMode       = (PivotMode) EditorPrefs.GetInt(PK + nameof(pivotMode),  (int)PivotMode.ChunkCenter);
             axis            = (AxisLayout)EditorPrefs.GetInt(PK + nameof(axis),       (int)AxisLayout.XZ_YUp);
             indexOrder      = (IndexOrder)EditorPrefs.GetInt(PK + nameof(indexOrder), (int)IndexOrder.FirstIsCol_X_SecondIsRow_Z);
-            invertU         = EditorPrefs.GetBool(PK + nameof(invertU),       false);
-            invertV         = EditorPrefs.GetBool(PK + nameof(invertV),       false);
             markStatic      = EditorPrefs.GetBool(PK + nameof(markStatic),    true);
             overwrite       = EditorPrefs.GetBool(PK + nameof(overwrite),     true);
             unpackPrefab    = EditorPrefs.GetBool(PK + nameof(unpackPrefab),  false);
@@ -95,8 +93,6 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetInt   (PK + nameof(pivotMode),       (int)pivotMode);
             EditorPrefs.SetInt   (PK + nameof(axis),            (int)axis);
             EditorPrefs.SetInt   (PK + nameof(indexOrder),      (int)indexOrder);
-            EditorPrefs.SetBool  (PK + nameof(invertU),         invertU);
-            EditorPrefs.SetBool  (PK + nameof(invertV),         invertV);
             EditorPrefs.SetBool  (PK + nameof(markStatic),      markStatic);
             EditorPrefs.SetBool  (PK + nameof(overwrite),       overwrite);
             EditorPrefs.SetBool  (PK + nameof(unpackPrefab),    unpackPrefab);
@@ -122,8 +118,6 @@ namespace ProjectName.EditorTools
             pivotMode  = (PivotMode) EditorGUILayout.EnumPopup("FBX pivot",          pivotMode);
             axis       = (AxisLayout)EditorGUILayout.EnumPopup("Axis layout",        axis);
             indexOrder = (IndexOrder)EditorGUILayout.EnumPopup("Index order in name", indexOrder);
-            invertU    = EditorGUILayout.Toggle("Invert U axis (X)",   invertU);
-            invertV    = EditorGUILayout.Toggle("Invert V axis (Z/Y)", invertV);
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
@@ -140,7 +134,7 @@ namespace ProjectName.EditorTools
                 "  • EXPORT_CENTERED=True  → pivot = ChunkCenter\n" +
                 "  • axis_forward='-Z', axis_up='Y' → leave Axis layout = XZ_YUp\n" +
                 "  • cx (1st in name) ↦ Unity X column, cy (2nd) ↦ Unity Z row → IndexOrder = FirstIsCol_X_SecondIsRow_Z\n\n" +
-                "If after import the city is mirrored along X or Z, toggle InvertU / InvertV. If rotated 90°, swap IndexOrder.",
+                "If after import the city is rotated 90°, swap IndexOrder.",
                 MessageType.Info);
 
             EditorGUILayout.Space();
@@ -200,8 +194,7 @@ namespace ProjectName.EditorTools
 
             Debug.Log($"[ChunkImporter] {entries.Count} FBX files; " +
                       $"grid a:{minA}..{maxA} ({countA}), b:{minB}..{maxB} ({countB}); " +
-                      $"cell={chunkSize}m; pivot={pivotMode}; axis={axis}; idxOrder={indexOrder}; " +
-                      $"invertU={invertU}, invertV={invertV}");
+                      $"cell={chunkSize}m; pivot={pivotMode}; axis={axis}; idxOrder={indexOrder}");
 
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
             {
@@ -260,9 +253,6 @@ namespace ProjectName.EditorTools
             float u = (col + 0.5f - countA * 0.5f) * chunkSize;
             float v = (row + 0.5f - countB * 0.5f) * chunkSize;
 
-            if (invertU) u = -u;
-            if (invertV) v = -v;
-
             Vector3 chunkCenterWorld = axis == AxisLayout.XZ_YUp
                 ? new Vector3(u, 0f, v)
                 : new Vector3(u, v, 0f);
@@ -316,6 +306,18 @@ namespace ProjectName.EditorTools
             root.transform.SetPositionAndRotation(rootPos, Quaternion.identity);
             SceneManager.MoveGameObjectToScene(root, scene);
 
+            // Force bakeAxisConversion=true so Unity bakes the Blender Z-up →
+            // Y-up rotation into the mesh data instead of leaving a compensating
+            // rotation on the FBX root. Without this, the use_space_transform=True
+            // export produces a root rotation that lands the chunk content
+            // mirrored 180° on the horizontal plane.
+            var modelImporter = AssetImporter.GetAtPath(e.assetPath) as ModelImporter;
+            if (modelImporter != null && !modelImporter.bakeAxisConversion)
+            {
+                modelImporter.bakeAxisConversion = true;
+                modelImporter.SaveAndReimport();
+            }
+
             // Instantiate FBX as a model-prefab instance (reimports propagate later).
             var fbx = AssetDatabase.LoadAssetAtPath<GameObject>(e.assetPath);
             if (fbx == null)
@@ -328,13 +330,12 @@ namespace ProjectName.EditorTools
             var inst = (GameObject)PrefabUtility.InstantiatePrefab(fbx, scene);
             inst.transform.SetParent(root.transform, worldPositionStays: false);
 
-            // === CRITICAL ===
-            // Reset only localPosition. Do NOT touch localRotation or localScale.
-            // The Blender export uses use_space_transform=True, bake_space_transform=False,
-            // which stores mesh data in Blender's Z-up coords and puts a compensating
-            // rotation on the FBX root. Overriding the rotation flips the whole chunk
-            // onto its side and is what caused the previous "crooked import".
+            // With bakeAxisConversion=true the FBX root rotation is baked into
+            // the mesh, so a clean identity local transform on the instance is
+            // safe and the chunk lands exactly at the root's world position.
             inst.transform.localPosition = Vector3.zero;
+            inst.transform.localRotation = Quaternion.identity;
+            inst.transform.localScale    = Vector3.one;
 
             if (unpackPrefab)
                 PrefabUtility.UnpackPrefabInstance(inst, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
