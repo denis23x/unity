@@ -49,6 +49,7 @@ namespace ProjectName.EditorTools
         float  chunkSize;
         bool overwrite;
         bool unpackPrefab;
+        bool addMeshCollider;
         string sceneNamePrefix;
 
         Vector2 scroll;
@@ -61,8 +62,9 @@ namespace ProjectName.EditorTools
             sourceFolder    = EditorPrefs.GetString(PK + nameof(sourceFolder),    "Assets/_Project/Art/Environment/Chunks_FBX");
             destFolder      = EditorPrefs.GetString(PK + nameof(destFolder),      "Assets/_Project/Scenes/Chunks");
             chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       100f);
-            overwrite       = EditorPrefs.GetBool(PK + nameof(overwrite),     true);
-            unpackPrefab    = EditorPrefs.GetBool(PK + nameof(unpackPrefab),  false);
+            overwrite       = EditorPrefs.GetBool(PK + nameof(overwrite),       true);
+            unpackPrefab    = EditorPrefs.GetBool(PK + nameof(unpackPrefab),    false);
+            addMeshCollider = EditorPrefs.GetBool(PK + nameof(addMeshCollider), true);
             sceneNamePrefix = EditorPrefs.GetString(PK + nameof(sceneNamePrefix), "Chunk_");
         }
 
@@ -73,6 +75,7 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetFloat (PK + nameof(chunkSize),       chunkSize);
             EditorPrefs.SetBool  (PK + nameof(overwrite),       overwrite);
             EditorPrefs.SetBool  (PK + nameof(unpackPrefab),    unpackPrefab);
+            EditorPrefs.SetBool  (PK + nameof(addMeshCollider), addMeshCollider);
             EditorPrefs.SetString(PK + nameof(sceneNamePrefix), sceneNamePrefix);
         }
 
@@ -92,8 +95,9 @@ namespace ProjectName.EditorTools
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
-            unpackPrefab = EditorGUILayout.Toggle("Unpack model prefab", unpackPrefab);
-            overwrite    = EditorGUILayout.Toggle("Overwrite existing",  overwrite);
+            unpackPrefab    = EditorGUILayout.Toggle("Unpack model prefab",     unpackPrefab);
+            addMeshCollider = EditorGUILayout.Toggle("Add MeshCollider",        addMeshCollider);
+            overwrite       = EditorGUILayout.Toggle("Overwrite existing",      overwrite);
 
             if (EditorGUI.EndChangeCheck()) SavePrefs();
 
@@ -265,6 +269,22 @@ namespace ProjectName.EditorTools
             PrefabUtility.UnpackPrefabInstance(inst, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
 
             BakeChunkToIdentity(root, inst, baseName);
+
+            if (addMeshCollider)
+            {
+                // Non-convex MeshCollider matches the visible geometry 1:1 and
+                // works for static environment (no Rigidbody on the chunk).
+                // sharedMesh points at the just-baked mesh, so the collision
+                // shape lives in the same local space as the renderer.
+                foreach (var mf in inst.GetComponentsInChildren<MeshFilter>(includeInactive: true))
+                {
+                    if (mf.sharedMesh == null) continue;
+                    var mc = mf.gameObject.GetComponent<MeshCollider>();
+                    if (mc == null) mc = mf.gameObject.AddComponent<MeshCollider>();
+                    mc.sharedMesh = mf.sharedMesh;
+                    mc.convex = false;
+                }
+            }
 
             bool ok = EditorSceneManager.SaveScene(scene, scenePath);
             EditorSceneManager.CloseScene(scene, removeScene: true);
