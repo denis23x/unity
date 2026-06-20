@@ -42,33 +42,11 @@ namespace ProjectName.EditorTools
 {
     public class ChunkImporter : EditorWindow
     {
-        public enum PivotMode
-        {
-            // FBX geometry centered around (0,0,0). EXPORT_CENTERED=True in Blender script.
-            ChunkCenter,
-            // FBX origin at the chunk's (-X,-Z) corner.
-            ChunkCornerMin,
-            // FBX preserves Blender source-world coords; whole grid gets one global shift.
-            OriginalSourcePosition,
-        }
-
-        public enum AxisLayout { XZ_YUp, XY }
-
-        public enum IndexOrder
-        {
-            FirstIsCol_X_SecondIsRow_Z, // NN_MM: NN=col along X, MM=row along Z   ← matches the Blender split script
-            FirstIsRow_Z_SecondIsCol_X,
-        }
-
         const string PK = "ChunkImporter.";
 
         string sourceFolder;
         string destFolder;
         float  chunkSize;
-        PivotMode pivotMode;
-        AxisLayout axis;
-        IndexOrder indexOrder;
-        bool markStatic;
         bool overwrite;
         bool unpackPrefab;
         string sceneNamePrefix;
@@ -83,10 +61,6 @@ namespace ProjectName.EditorTools
             sourceFolder    = EditorPrefs.GetString(PK + nameof(sourceFolder),    "Assets/_Project/Art/Environment/Chunks_FBX");
             destFolder      = EditorPrefs.GetString(PK + nameof(destFolder),      "Assets/_Project/Scenes/Chunks");
             chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       100f);
-            pivotMode       = (PivotMode) EditorPrefs.GetInt(PK + nameof(pivotMode),  (int)PivotMode.ChunkCenter);
-            axis            = (AxisLayout)EditorPrefs.GetInt(PK + nameof(axis),       (int)AxisLayout.XZ_YUp);
-            indexOrder      = (IndexOrder)EditorPrefs.GetInt(PK + nameof(indexOrder), (int)IndexOrder.FirstIsCol_X_SecondIsRow_Z);
-            markStatic      = EditorPrefs.GetBool(PK + nameof(markStatic),    true);
             overwrite       = EditorPrefs.GetBool(PK + nameof(overwrite),     true);
             unpackPrefab    = EditorPrefs.GetBool(PK + nameof(unpackPrefab),  false);
             sceneNamePrefix = EditorPrefs.GetString(PK + nameof(sceneNamePrefix), "Chunk_");
@@ -97,10 +71,6 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetString(PK + nameof(sourceFolder),    sourceFolder);
             EditorPrefs.SetString(PK + nameof(destFolder),      destFolder);
             EditorPrefs.SetFloat (PK + nameof(chunkSize),       chunkSize);
-            EditorPrefs.SetInt   (PK + nameof(pivotMode),       (int)pivotMode);
-            EditorPrefs.SetInt   (PK + nameof(axis),            (int)axis);
-            EditorPrefs.SetInt   (PK + nameof(indexOrder),      (int)indexOrder);
-            EditorPrefs.SetBool  (PK + nameof(markStatic),      markStatic);
             EditorPrefs.SetBool  (PK + nameof(overwrite),       overwrite);
             EditorPrefs.SetBool  (PK + nameof(unpackPrefab),    unpackPrefab);
             EditorPrefs.SetString(PK + nameof(sceneNamePrefix), sceneNamePrefix);
@@ -121,14 +91,7 @@ namespace ProjectName.EditorTools
             sceneNamePrefix = EditorGUILayout.TextField("Scene name prefix", sceneNamePrefix);
 
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("Layout", EditorStyles.boldLabel);
-            pivotMode  = (PivotMode) EditorGUILayout.EnumPopup("FBX pivot",          pivotMode);
-            axis       = (AxisLayout)EditorGUILayout.EnumPopup("Axis layout",        axis);
-            indexOrder = (IndexOrder)EditorGUILayout.EnumPopup("Index order in name", indexOrder);
-
-            EditorGUILayout.Space();
             EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
-            markStatic   = EditorGUILayout.Toggle("Mark static",         markStatic);
             unpackPrefab = EditorGUILayout.Toggle("Unpack model prefab", unpackPrefab);
             overwrite    = EditorGUILayout.Toggle("Overwrite existing",  overwrite);
 
@@ -136,12 +99,9 @@ namespace ProjectName.EditorTools
 
             EditorGUILayout.Space();
             EditorGUILayout.HelpBox(
-                "Filename pattern: NN_MM.fbx (e.g. 00_00.fbx, 07_03.fbx).\n\n" +
-                "Matched against the included Blender split script:\n" +
-                "  • EXPORT_CENTERED=True  → pivot = ChunkCenter\n" +
-                "  • axis_forward='-Z', axis_up='Y' → leave Axis layout = XZ_YUp\n" +
-                "  • cx (1st in name) ↦ Unity X column, cy (2nd) ↦ Unity Z row → IndexOrder = FirstIsCol_X_SecondIsRow_Z\n\n" +
-                "If after import the city is rotated 90°, swap IndexOrder.",
+                "Filename pattern: NN_MM.fbx (e.g. 00_00.fbx, 07_03.fbx).\n" +
+                "NN = column (Unity X), MM = row (Unity Z).\n" +
+                "Matched against the Blender split script: EXPORT_CENTERED=True, axis_forward='-Z', axis_up='Y'.",
                 MessageType.Info);
 
             EditorGUILayout.Space();
@@ -200,8 +160,7 @@ namespace ProjectName.EditorTools
             int countB = maxB - minB + 1;
 
             Debug.Log($"[ChunkImporter] {entries.Count} FBX files; " +
-                      $"grid a:{minA}..{maxA} ({countA}), b:{minB}..{maxB} ({countB}); " +
-                      $"cell={chunkSize}m; pivot={pivotMode}; axis={axis}; idxOrder={indexOrder}");
+                      $"grid a:{minA}..{maxA} ({countA}), b:{minB}..{maxB} ({countB}); cell={chunkSize}m");
 
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
             {
@@ -243,57 +202,14 @@ namespace ProjectName.EditorTools
 
         bool ImportOne(Entry e, int minA, int minB, int countA, int countB)
         {
-            // Map filename indices (a, b) to (col along U, row along V) on the horizontal plane.
-            int col, row;
-            if (indexOrder == IndexOrder.FirstIsCol_X_SecondIsRow_Z)
-            {
-                col = e.a - minA;
-                row = e.b - minB;
-            }
-            else
-            {
-                row = e.a - minA;
-                col = e.b - minB;
-            }
+            // NN = col along Unity X, MM = row along Unity Z (matches the Blender split script).
+            int col = e.a - minA;
+            int row = e.b - minB;
 
             // Chunk center in world space, with the whole grid centered on (0,0,0).
             float u = (col + 0.5f - countA * 0.5f) * chunkSize;
             float v = (row + 0.5f - countB * 0.5f) * chunkSize;
-
-            Vector3 chunkCenterWorld = axis == AxisLayout.XZ_YUp
-                ? new Vector3(u, 0f, v)
-                : new Vector3(u, v, 0f);
-
-            // Root position depends on FBX pivot.
-            Vector3 rootPos;
-            switch (pivotMode)
-            {
-                case PivotMode.ChunkCenter:
-                    rootPos = chunkCenterWorld;
-                    break;
-
-                case PivotMode.ChunkCornerMin:
-                {
-                    Vector3 cornerOffset = axis == AxisLayout.XZ_YUp
-                        ? new Vector3(-chunkSize * 0.5f, 0f, -chunkSize * 0.5f)
-                        : new Vector3(-chunkSize * 0.5f, -chunkSize * 0.5f, 0f);
-                    rootPos = chunkCenterWorld + cornerOffset;
-                    break;
-                }
-
-                case PivotMode.OriginalSourcePosition:
-                {
-                    Vector3 shift = axis == AxisLayout.XZ_YUp
-                        ? new Vector3(-countA * chunkSize * 0.5f, 0f, -countB * chunkSize * 0.5f)
-                        : new Vector3(-countA * chunkSize * 0.5f, -countB * chunkSize * 0.5f, 0f);
-                    rootPos = shift;
-                    break;
-                }
-
-                default:
-                    rootPos = chunkCenterWorld;
-                    break;
-            }
+            Vector3 rootPos = new Vector3(u, 0f, v);
 
             string baseName  = $"{sceneNamePrefix}{e.a:00}_{e.b:00}";
             string scenePath = $"{destFolder}/{baseName}.unity";
@@ -350,19 +266,6 @@ namespace ProjectName.EditorTools
 
             BakeChunkToIdentity(root, inst, baseName);
 
-            if (markStatic)
-            {
-                // NavigationStatic intentionally omitted — A* Pathfinding Project Pro
-                // uses its own Recast baking, not Unity NavMesh.
-                var flags = StaticEditorFlags.ContributeGI
-                          | StaticEditorFlags.BatchingStatic
-                          | StaticEditorFlags.OccluderStatic
-                          | StaticEditorFlags.OccludeeStatic
-                          | StaticEditorFlags.ReflectionProbeStatic;
-                foreach (var t in root.GetComponentsInChildren<Transform>(true))
-                    GameObjectUtility.SetStaticEditorFlags(t.gameObject, flags);
-            }
-
             bool ok = EditorSceneManager.SaveScene(scene, scenePath);
             EditorSceneManager.CloseScene(scene, removeScene: true);
 
@@ -383,14 +286,41 @@ namespace ProjectName.EditorTools
         {
             var meshFilters = inst.GetComponentsInChildren<MeshFilter>(includeInactive: true);
 
-            // Snapshot the world matrices BEFORE mutating any Transform — once
-            // we start writing identity onto parents, the children's
-            // localToWorldMatrix would change underneath us.
-            var rootInverse = root.transform.worldToLocalMatrix;
-            var bakeMatrices = new Matrix4x4[meshFilters.Length];
+            // Snapshot each MeshFilter's world position and its world
+            // rotation+scale matrix BEFORE mutating any Transform. Splitting
+            // the matrix is what restores the rotation pivot: only the
+            // rotation+scale part is baked into vertices, the translation
+            // goes back onto the GameObject Transform below. If we baked the
+            // full matrix instead, every Transform would sit at the chunk
+            // root and rotating a single building would swing it around the
+            // chunk centre rather than its own pivot.
+            var worldPositions = new Vector3[meshFilters.Length];
+            var worldRotScales = new Matrix4x4[meshFilters.Length];
             for (int i = 0; i < meshFilters.Length; i++)
-                bakeMatrices[i] = rootInverse * meshFilters[i].transform.localToWorldMatrix;
+            {
+                var m = meshFilters[i].transform.localToWorldMatrix;
+                worldPositions[i] = new Vector3(m.m03, m.m13, m.m23);
+                m.m03 = 0f; m.m13 = 0f; m.m23 = 0f;
+                worldRotScales[i] = m;
+            }
 
+            // Collapse every Transform under inst to identity so the FBX
+            // root's -90°X / scale 100 disappears from the hierarchy.
+            foreach (var t in inst.GetComponentsInChildren<Transform>(includeInactive: true))
+            {
+                t.localPosition = Vector3.zero;
+                t.localRotation = Quaternion.identity;
+                t.localScale    = Vector3.one;
+            }
+
+            // Restore each MeshFilter to its original world position and bake
+            // the matching rotation+scale into the mesh vertices. The
+            // resulting Transform has identity rotation+scale + the mesh's
+            // own world position, so rotating it pivots around the mesh
+            // itself. GetComponentsInChildren returns components in
+            // depth-first order, so a MeshFilter that is also an ancestor
+            // of another MeshFilter is placed before its descendants — the
+            // child's world position then lands correctly.
             for (int i = 0; i < meshFilters.Length; i++)
             {
                 var mf = meshFilters[i];
@@ -403,23 +333,14 @@ namespace ProjectName.EditorTools
                     continue;
                 }
 
-                var baked = BakeMeshThroughMatrix(source, bakeMatrices[i]);
-                baked.name = $"{source.name}_baked";
+                mf.transform.position = worldPositions[i];
 
+                var baked = BakeMeshThroughMatrix(source, worldRotScales[i]);
+                baked.name = $"{source.name}_baked";
                 // No CreateAsset call — leaving the mesh as a scene-owned
                 // object makes SaveScene serialise its data inline into the
                 // .unity file, so no extra .asset clutter is produced.
                 mf.sharedMesh = baked;
-            }
-
-            // Every MeshFilter now references a mesh whose vertices are in
-            // root-local space, so collapsing every Transform under inst to
-            // identity leaves the rendered geometry unchanged.
-            foreach (var t in inst.GetComponentsInChildren<Transform>(includeInactive: true))
-            {
-                t.localPosition = Vector3.zero;
-                t.localRotation = Quaternion.identity;
-                t.localScale    = Vector3.one;
             }
         }
 

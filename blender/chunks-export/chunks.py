@@ -32,22 +32,9 @@ CLEAR_PREVIOUS = True
 # and seam artifacts along chunk boundaries.
 MERGE_DOUBLES = True
 
-# Recalculate face normals after slicing so outward-facing normals are
-# consistent on freshly created geometry.
-RECALC_NORMALS = True
-
 # Set to False to skip FBX export and only build the _chunks collections
 # inside Blender (useful for a quick visual check without writing files).
 DO_EXPORT = True
-
-# When True, empty cube objects are added at each chunk pivot so you can
-# see the grid boundaries in the viewport.
-SHOW_GIZMOS = False
-
-# When True, every object in a chunk is temporarily shifted by -chunk_pivot
-# before export so the resulting FBX origin sits at (0, 0, 0).
-# This matches PivotMode.ChunkCenter in the Unity ChunkImporter script.
-EXPORT_CENTERED = True
 
 # Logging
 # OUTPUT_DIR is created here unconditionally so the log file is always written,
@@ -115,8 +102,9 @@ def world_to_chunk(x, y):
 def chunk_pivot(cx, cy):
     """Return the world-space center of chunk (cx, cy) at Z = 0.
 
-    This is the point used as the FBX export origin when EXPORT_CENTERED=True,
-    and the value Unity stores in the scene root's world position.
+    This is the point used as the FBX export origin (each chunk's objects are
+    shifted by -pivot before export), and the value Unity stores in the scene
+    root's world position.
     """
     return Vector((all_min.x + (cx + 0.5) * chunk_w,
                    all_min.y + (cy + 0.5) * chunk_h,
@@ -253,17 +241,16 @@ for src in to_slice:
             clear_inner=False, clear_outer=False,
         )
 
-    if RECALC_NORMALS:
-        # Do NOT use bmesh.ops.recalc_face_normals here: it assumes a closed
-        # volume and on open ribbons (roads, fences, terrain strips) it flips
-        # arbitrary subsets of faces, which is exactly the bug we want to
-        # avoid. Instead, restore each face to the direction we snapshotted
-        # before the bisect cuts. If the current normal points opposite to
-        # the stored reference, flip the face's winding.
-        bm.normal_update()
-        for f in bm.faces:
-            if f.normal.dot(f[ref_normal]) < 0.0:
-                f.normal_flip()
+    # Do NOT use bmesh.ops.recalc_face_normals here: it assumes a closed
+    # volume and on open ribbons (roads, fences, terrain strips) it flips
+    # arbitrary subsets of faces, which is exactly the bug we want to
+    # avoid. Instead, restore each face to the direction we snapshotted
+    # before the bisect cuts. If the current normal points opposite to
+    # the stored reference, flip the face's winding.
+    bm.normal_update()
+    for f in bm.faces:
+        if f.normal.dot(f[ref_normal]) < 0.0:
+            f.normal_flip()
 
     bm.faces.ensure_lookup_table()
     bm.verts.ensure_lookup_table()
@@ -291,8 +278,8 @@ for src in to_slice:
         pivot = chunk_pivot(cx, cy)
 
         # Copy vertices, translating them so the chunk pivot becomes the local origin.
-        # This pre-centres the geometry, matching EXPORT_CENTERED behaviour for
-        # sliced parts (the object's location will be set to pivot separately).
+        # This pre-centres the geometry for sliced parts (the object's location will
+        # be set to pivot separately).
         vert_map = {}
         for sf in src_faces:
             for v in sf.verts:
@@ -376,18 +363,7 @@ for key in list(chunk_colls.keys()):
         empty += 1
 log(f"Removed {empty} empty chunks, {len(chunk_colls)} non-empty remain")
 
-# ── Step 7: optional viewport gizmos ──
-# Adds an Empty (cube display) at each chunk pivot so the grid is visible
-# in the 3D viewport. Enable SHOW_GIZMOS = True to use.
-if SHOW_GIZMOS:
-    for (cx, cy), cc in chunk_colls.items():
-        gz = bpy.data.objects.new(f"chunk_{cx:02d}_{cy:02d}_bounds", None)
-        gz.empty_display_type = 'CUBE'
-        gz.empty_display_size = max(chunk_w, chunk_h) * 0.5
-        gz.location = chunk_pivot(cx, cy)
-        cc.objects.link(gz)
-
-# ── Step 8: FBX export with temporary centring ──
+# ── Step 7: FBX export with temporary centring ──
 # Each chunk's mesh objects are temporarily shifted by -pivot so the FBX
 # origin lands at (0, 0, 0). Original locations are restored unconditionally
 # in a finally block so the scene is never left in a shifted state even if
@@ -401,7 +377,7 @@ if SHOW_GIZMOS:
 #   the child's localPosition — do NOT change these two flags without updating
 #   the Unity importer as well.
 if DO_EXPORT:
-    log(f"\nExporting FBX to {OUTPUT_DIR} (centered={EXPORT_CENTERED})")
+    log(f"\nExporting FBX to {OUTPUT_DIR}")
 
     orig_active = bpy.context.view_layer.objects.active
     orig_sel = list(bpy.context.selected_objects)
@@ -418,11 +394,10 @@ if DO_EXPORT:
         saved_locations = [(o, o.location.copy()) for o in mesh_objs]
 
         try:
-            if EXPORT_CENTERED:
-                # Move every object in the chunk so the chunk pivot is at origin.
-                for o in mesh_objs:
-                    o.location = o.location - pivot
-                bpy.context.view_layer.update()
+            # Move every object in the chunk so the chunk pivot is at origin.
+            for o in mesh_objs:
+                o.location = o.location - pivot
+            bpy.context.view_layer.update()
 
             # Select only the objects belonging to this chunk for export.
             bpy.ops.object.select_all(action='DESELECT')
@@ -441,7 +416,7 @@ if DO_EXPORT:
                 apply_unit_scale=True,
                 apply_scale_options='FBX_SCALE_NONE',
                 # These two settings together produce Unity's standard import behaviour.
-                # See the note above Step 8 before changing them.
+                # See the note above Step 7 before changing them.
                 use_space_transform=True,
                 bake_space_transform=False,
                 axis_forward='-Z', axis_up='Y',
