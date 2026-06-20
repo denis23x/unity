@@ -5,14 +5,14 @@ using UnityEditor;
 namespace Postal.World
 {
     /// <summary>
-    /// Gizmo-визуализация ChunkStreamer'а: фоновая сетка, кольца загрузки/выгрузки,
+    /// Gizmo-визуализация ChunkStream'а: фоновая сетка, кольца загрузки/выгрузки,
     /// маркер игрока, состояния чанков с подписями, HUD-сводка. Полностью
     /// заворачивается в #if UNITY_EDITOR — в standalone-сборку не входит совсем.
     ///
-    /// Это partial-файл основного класса ChunkStreamer. Имеет доступ ко всем приватным
+    /// Это partial-файл основного класса ChunkStream. Имеет доступ ко всем приватным
     /// полям: _chunks, _lastCenter, _origin, loadRadius и т.д.
     /// </summary>
-    public partial class ChunkStreamer
+    public partial class ChunkStream
     {
         // ============================================================
         // Конфигурация gizmo (все цвета/тоглы)
@@ -88,7 +88,7 @@ namespace Postal.World
             public bool showChunkLabels = true;
             public Color chunkLabelColor = Color.white;
 
-            [Header("HUD-сводка над игроком (показывается при выделении ChunkStreamer)")]
+            [Header("HUD-сводка над игроком (показывается при выделении ChunkStream)")]
             public bool showHUD = true;
             public Color hudColor = Color.white;
         }
@@ -99,17 +99,13 @@ namespace Postal.World
 
             if (!_initialized)
             {
-                // Edit-mode: показываем сетку относительно gridOrigin и где будет игрок,
+                // Edit-mode: показываем сетку и чанк, в котором стартует игрок,
                 // чтобы можно было проверить выравнивание до запуска игры.
+                // CurrentChunk сам использует ActiveOrigin и потому корректен и в edit-mode.
                 if (target != null)
                 {
-                    Vector3 rel = target.position - gridOrigin;
-                    float half = chunkSize * 0.5f;
-                    var editCenter = new ChunkCoord(
-                        Mathf.FloorToInt((rel.x + half) / chunkSize),
-                        Mathf.FloorToInt((rel.z + half) / chunkSize));
-
-                    if (gizmos.showGrid) DrawGrid(gridOrigin, editCenter);
+                    var editCenter = CurrentChunk();
+                    if (gizmos.showGrid) DrawGrid(editCenter);
                     if (gizmos.showCurrentChunkOutline)
                         DrawChunkOutline(editCenter, gizmos.currentChunkColor);
                     if (gizmos.showPlayerMarker) DrawPlayerCrosshair(target.position);
@@ -120,7 +116,7 @@ namespace Postal.World
             var center = CurrentChunk();
 
             if (gizmos.showGrid)
-                DrawGrid(ActiveOrigin, center);
+                DrawGrid(center);
 
             if (gizmos.showCurrentChunkOutline)
                 DrawChunkOutline(center, gizmos.currentChunkColor);
@@ -179,14 +175,15 @@ namespace Postal.World
 
         // ---- gizmo helpers ----
 
-        void DrawGrid(Vector3 origin, ChunkCoord center)
+        void DrawGrid(ChunkCoord center)
         {
             Gizmos.color = gizmos.gridColor;
             float r = gizmos.gridRadius * chunkSize;
             // Y игрока, чтобы сетка лежала ровно на земле, не уходила в небо/под пол.
-            float y = (target != null ? target.position.y : 0f) - chunkSize * 0f + gizmos.yLevel;
-            // Сдвиг по чанкам — сетка ползёт вместе с игроком.
-            Vector3 base_ = origin + new Vector3(center.X * chunkSize, 0f, center.Y * chunkSize);
+            float y = (target != null ? target.position.y : 0f) + gizmos.yLevel;
+            // База — мировой центр чанка игрока. ChunkWorldCenter учитывает gridSize,
+            // поэтому сетка остаётся выровнена с импортёром при любом размере grid.
+            Vector3 base_ = ChunkWorldCenter(center);
             base_.y = y;
 
             for (int i = -gizmos.gridRadius; i <= gizmos.gridRadius + 1; i++)

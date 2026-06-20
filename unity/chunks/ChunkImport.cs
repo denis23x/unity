@@ -1,4 +1,4 @@
-// Assets/Editor/ChunkImporter.cs
+// Assets/Editor/ChunkImport.cs
 //
 // Batch-imports NN_MM.fbx chunks (exported from the Blender split script with
 // EXPORT_CENTERED=True, axis_forward='-Z', axis_up='Y') into individual Unity
@@ -9,9 +9,11 @@
 //   Blender +Y → Unity +Z         (row index, second in filename, cy)
 //   Blender +Z → Unity +Y         (up)
 //
-// Example for 8×8 grid, 100 m cells (chunk geometry centered in FBX):
-//   Chunk_00_00 → root @ (-350, 0, -350)
-//   Chunk_07_07 → root @ ( 350, 0,  350)
+// World position math (zero-centered grid, matches ChunkStream.ChunkWorldCenter):
+//   u = (col + 0.5 - countA/2) * chunkSize
+//   v = (row + 0.5 - countB/2) * chunkSize
+// Grid dims (countA × countB) are derived from the FBX file set on disk;
+// chunkSize is set in this importer's UI (default = ChunkStream.DefaultChunkSize).
 //
 // Mesh-bake pipeline:
 //   Blender's FBX export gives every instantiated chunk a non-identity local
@@ -37,12 +39,13 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Postal.World; // ChunkStream.DefaultChunkSize — единый дефолт для размера чанка
 
 namespace ProjectName.EditorTools
 {
-    public class ChunkImporter : EditorWindow
+    public class ChunkImport : EditorWindow
     {
-        const string PK = "ChunkImporter.";
+        const string PK = "ChunkImport.";
 
         string sourceFolder;
         string destFolder;
@@ -55,13 +58,13 @@ namespace ProjectName.EditorTools
         Vector2 scroll;
 
         [MenuItem("Tools/Chunks/Import FBX → Scenes")]
-        static void Open() => GetWindow<ChunkImporter>("Chunk Importer");
+        static void Open() => GetWindow<ChunkImport>("Chunk Import");
 
         void OnEnable()
         {
-            sourceFolder    = EditorPrefs.GetString(PK + nameof(sourceFolder),    "Assets/_Project/Art/Environment/Chunks_FBX");
-            destFolder      = EditorPrefs.GetString(PK + nameof(destFolder),      "Assets/_Project/Scenes/Chunks");
-            chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       100f);
+            sourceFolder    = EditorPrefs.GetString(PK + nameof(sourceFolder),    "Assets/Chunks");
+            destFolder      = EditorPrefs.GetString(PK + nameof(destFolder),      "Assets/Scenes/Chunks");
+            chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       ChunkStream.DefaultChunkSize);
             overwrite       = EditorPrefs.GetBool(PK + nameof(overwrite),       true);
             unpackPrefab    = EditorPrefs.GetBool(PK + nameof(unpackPrefab),    false);
             addMeshCollider = EditorPrefs.GetBool(PK + nameof(addMeshCollider), true);
@@ -124,7 +127,7 @@ namespace ProjectName.EditorTools
         {
             if (!AssetDatabase.IsValidFolder(sourceFolder))
             {
-                EditorUtility.DisplayDialog("Chunk Importer",
+                EditorUtility.DisplayDialog("Chunk Import",
                     $"Source folder not found or not a Unity asset folder:\n{sourceFolder}", "OK");
                 return;
             }
@@ -151,7 +154,7 @@ namespace ProjectName.EditorTools
 
             if (entries.Count == 0)
             {
-                EditorUtility.DisplayDialog("Chunk Importer", "Found 0 NN_MM.fbx files in source folder.", "OK");
+                EditorUtility.DisplayDialog("Chunk Import", "Found 0 NN_MM.fbx files in source folder.", "OK");
                 return;
             }
 
@@ -163,12 +166,12 @@ namespace ProjectName.EditorTools
             int countA = maxA - minA + 1;
             int countB = maxB - minB + 1;
 
-            Debug.Log($"[ChunkImporter] {entries.Count} FBX files; " +
+            Debug.Log($"[ChunkImport] {entries.Count} FBX files; " +
                       $"grid a:{minA}..{maxA} ({countA}), b:{minB}..{maxB} ({countB}); cell={chunkSize}m");
 
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
             {
-                Debug.LogWarning("[ChunkImporter] Aborted by user (unsaved scenes).");
+                Debug.LogWarning("[ChunkImport] Aborted by user (unsaved scenes).");
                 return;
             }
 
@@ -198,9 +201,9 @@ namespace ProjectName.EditorTools
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
 
-            Debug.Log($"[ChunkImporter] DONE. {written}/{entries.Count} scenes written to {destFolder}.");
+            Debug.Log($"[ChunkImport] DONE. {written}/{entries.Count} scenes written to {destFolder}.");
 
-            EditorUtility.DisplayDialog("Chunk Importer",
+            EditorUtility.DisplayDialog("Chunk Import",
                 $"Done.\n{written}/{entries.Count} scenes written to:\n{destFolder}", "OK");
         }
 
@@ -220,7 +223,7 @@ namespace ProjectName.EditorTools
 
             if (File.Exists(scenePath) && !overwrite)
             {
-                Debug.Log($"[ChunkImporter] Skip existing: {scenePath}");
+                Debug.Log($"[ChunkImport] Skip existing: {scenePath}");
                 return false;
             }
 
@@ -252,7 +255,7 @@ namespace ProjectName.EditorTools
             var fbx = AssetDatabase.LoadAssetAtPath<GameObject>(e.assetPath);
             if (fbx == null)
             {
-                Debug.LogError($"[ChunkImporter] Could not load FBX asset: {e.assetPath}");
+                Debug.LogError($"[ChunkImport] Could not load FBX asset: {e.assetPath}");
                 EditorSceneManager.CloseScene(scene, removeScene: true);
                 return false;
             }
@@ -289,8 +292,8 @@ namespace ProjectName.EditorTools
             bool ok = EditorSceneManager.SaveScene(scene, scenePath);
             EditorSceneManager.CloseScene(scene, removeScene: true);
 
-            if (!ok) Debug.LogError($"[ChunkImporter] Failed to save: {scenePath}");
-            else     Debug.Log($"[ChunkImporter] {baseName}  →  root @ ({rootPos.x:F1}, {rootPos.y:F1}, {rootPos.z:F1})  [col={col}, row={row}]");
+            if (!ok) Debug.LogError($"[ChunkImport] Failed to save: {scenePath}");
+            else     Debug.Log($"[ChunkImport] {baseName}  →  root @ ({rootPos.x:F1}, {rootPos.y:F1}, {rootPos.z:F1})  [col={col}, row={row}]");
 
             return ok;
         }
@@ -349,7 +352,7 @@ namespace ProjectName.EditorTools
 
                 if (!source.isReadable)
                 {
-                    Debug.LogWarning($"[ChunkImporter] {baseName}: source mesh '{source.name}' is not readable; skipping bake for this filter.");
+                    Debug.LogWarning($"[ChunkImport] {baseName}: source mesh '{source.name}' is not readable; skipping bake for this filter.");
                     continue;
                 }
 

@@ -373,7 +373,7 @@ log(f"Removed {empty} empty chunks, {len(chunk_colls)} non-empty remain")
 #   use_space_transform=True + bake_space_transform=False stores mesh data in
 #   Blender's Z-up coordinate system and adds a compensating rotation on the
 #   FBX root node. Unity reads that root rotation to flip the asset to Y-up.
-#   The Unity ChunkImporter script preserves this root rotation and only resets
+#   The Unity ChunkImport script preserves this root rotation and only resets
 #   the child's localPosition — do NOT change these two flags without updating
 #   the Unity importer as well.
 if DO_EXPORT:
@@ -406,7 +406,7 @@ if DO_EXPORT:
             bpy.context.view_layer.objects.active = mesh_objs[0]
 
             # Output filename: NN_MM.fbx — NN = column (X), MM = row (Y/Z).
-            # The Unity ChunkImporter expects exactly this naming convention.
+            # The Unity ChunkImport expects exactly this naming convention.
             filepath = os.path.join(OUTPUT_DIR, f"{cx:02d}_{cy:02d}.fbx")
             bpy.ops.export_scene.fbx(
                 filepath=filepath,

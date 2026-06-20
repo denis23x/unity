@@ -11,10 +11,10 @@ using UnityEngine.ResourceManagement.ResourceProviders;
 namespace Postal.World
 {
     /// <summary>
-    /// Целочисленная координата чанка на сетке.
-    /// Чанк (X, Y) физически центрирован на:
-    ///   world XZ = origin + (X * chunkSize, 0, Y * chunkSize)
-    /// Сам чанк покрывает диапазон ±chunkSize/2 от центра.
+    /// Целочисленная координата чанка на сетке. Совпадает с NN/MM-индексом в имени
+    /// сцены Chunk_NN_MM.unity, который задаёт ChunkImport при экспорте FBX-чанков.
+    /// Перевод координаты в мировую позицию делается через ChunkStream.ChunkWorldCenter —
+    /// формула зависит от gridSize и gridOrigin, поэтому здесь её намеренно нет.
     /// Y здесь — имя в координатах чанка, не путать с world Y (высотой).
     /// </summary>
     public readonly struct ChunkCoord : IEquatable<ChunkCoord>
@@ -42,7 +42,8 @@ namespace Postal.World
         // это не ломало корректность, новая версия аккуратнее).
         public override int GetHashCode() => HashCode.Combine(X, Y);
         public override string ToString() => $"({X},{Y})";
-        public string ToAddress() => $"{X}_{Y}";
+        // Совпадает с именем .unity-сцены от ChunkImport (sceneNamePrefix="Chunk_", :00 padding).
+        public string ToAddress() => $"Chunk_{X:00}_{Y:00}";
     }
 
     /// <summary>
@@ -57,8 +58,19 @@ namespace Postal.World
     ///    стрелка скорости, цветная заливка по состояниям, таймер на pending-unload,
     ///    координатные подписи.
     /// </summary>
-    public partial class ChunkStreamer : MonoBehaviour
+    public partial class ChunkStream : MonoBehaviour
     {
+        // ============================================================
+        // Канонические дефолты сетки. Менять ЗДЕСЬ — и стример, и ChunkImport
+        // подхватят одно значение для свежей установки. Уже сериализованные
+        // значения (на компоненте в сцене и в EditorPrefs импортёра) не
+        // обновятся автоматически — править их Inspector'ом / в окне импортёра,
+        // либо разово сбросить EditorPrefs ключи и Reset на компоненте.
+        // ============================================================
+
+        public const float DefaultChunkSize     = 100f;
+        public const int   DefaultGridDimension = 8;
+
         // ============================================================
         // Configuration
         // ============================================================
@@ -67,16 +79,17 @@ namespace Postal.World
         [SerializeField] Transform target;
 
         [Header("Якорь сетки")]
-        [Tooltip("Мировая позиция, на которой находится ЦЕНТР чанка (0,0). По умолчанию (0,0,0) — " +
-                 "глобальная сетка, привязанная к мировому origin. Должна совпадать с тем, как ты " +
-                 "авторизовал свои Addressable-сцены: сцена '1_0' должна физически лежать вокруг " +
-                 "(gridOrigin.x + chunkSize, 0, gridOrigin.z), сцена '0_1' — вокруг " +
-                 "(gridOrigin.x, 0, gridOrigin.z + chunkSize), и т.д. " +
-                 "НЕ меняй во время Play — это сместит всю сетку и приведёт к каскаду перезагрузок.")]
+        [Tooltip("Мировая позиция, в которой центрируется ВСЯ сетка (как делает ChunkImport). " +
+                 "По умолчанию (0,0,0) — сетка центрирована на мировом origin. " +
+                 "НЕ меняй во время Play — сместит всю сетку и приведёт к каскаду перезагрузок.")]
         [SerializeField] Vector3 gridOrigin = Vector3.zero;
 
         [Header("Сетка")]
-        [SerializeField, Min(1f)] float chunkSize = 128f;
+        [SerializeField, Min(1f)] float chunkSize = DefaultChunkSize;
+        [Tooltip("Размер сетки в чанках (X = столбцы, Y = ряды). Должен совпадать с GRID_X / GRID_Y " +
+                 "в Blender-скрипте экспорта. Используется и для перевода мировой позиции игрока " +
+                 "в Chunk_NN_MM координату, и для отсечки запросов вне границ сетки.")]
+        [SerializeField] Vector2Int gridSize = new Vector2Int(DefaultGridDimension, DefaultGridDimension);
         [SerializeField, Min(0)] int loadRadius = 1;
         [SerializeField, Min(1)] int unloadRadius = 2;
 
@@ -159,8 +172,6 @@ namespace Postal.World
         int _activeLoads;
         float _nextMemoryCheckTime;
 
-        static readonly ChunkCoord MAIN = new ChunkCoord(0, 0);
-
         // ============================================================
         // Lifecycle
         // ============================================================
@@ -174,7 +185,7 @@ namespace Postal.World
         {
             if (target == null)
             {
-                Debug.LogError("[ChunkStreamer] Не назначен target — выключаюсь.");
+                Debug.LogError("[ChunkStream] Не назначен target — выключаюсь.");
                 enabled = false;
                 return;
             }
@@ -207,7 +218,7 @@ namespace Postal.World
             // Unity-овский == null корректно ловит "missing reference" Object'ы.
             if (target == null)
             {
-                Debug.LogWarning("[ChunkStreamer] target == null, выключаюсь. " +
+                Debug.LogWarning("[ChunkStream] target == null, выключаюсь. " +
                                  "Если игрок пересоздаётся — назначь новый target и заново enable.");
                 enabled = false;
                 return;
@@ -257,21 +268,31 @@ namespace Postal.World
         public ChunkCoord CurrentChunk()
         {
             Vector3 rel = target.position - ActiveOrigin;
-            // Сдвиг на +chunkSize/2 переносит точку отсчёта на ЦЕНТР чанка (0,0):
-            //  rel.x = 0 → (0+64)/128 = 0.5 → floor = 0
-            //  rel.x = +64 → 1.0 → floor = 1 (граница ровно на +chunkSize/2)
-            //  rel.x = -65 → -0.0078 → floor = -1
-            float half = chunkSize * 0.5f;
+            // Та же математика, что в ChunkImport.ImportOne:
+            //   u_center = (col + 0.5 - gridSize.x/2) * chunkSize
+            // Инверсия для "в каком чанке точка u":
+            //   col = floor(u / chunkSize + gridSize.x/2)
+            // Для 8×8/100м игрок в мировом (0,0,0) → Chunk_04_04, в (-350,0,-350) → Chunk_00_00.
             return new ChunkCoord(
-                Mathf.FloorToInt((rel.x + half) / chunkSize),
-                Mathf.FloorToInt((rel.z + half) / chunkSize));
+                Mathf.FloorToInt(rel.x / chunkSize + gridSize.x * 0.5f),
+                Mathf.FloorToInt(rel.z / chunkSize + gridSize.y * 0.5f));
         }
 
-        /// <summary>Мировой центр чанка (Y=0).</summary>
+        /// <summary>Мировой центр чанка (Y=0). Зеркало CurrentChunk.</summary>
         public Vector3 ChunkWorldCenter(ChunkCoord c)
         {
-            return ActiveOrigin + new Vector3(c.X * chunkSize, 0f, c.Y * chunkSize);
+            return ActiveOrigin + new Vector3(
+                (c.X + 0.5f - gridSize.x * 0.5f) * chunkSize,
+                0f,
+                (c.Y + 0.5f - gridSize.y * 0.5f) * chunkSize);
         }
+
+        /// <summary>
+        /// Координата лежит в пределах конечной сетки [0, gridSize)? Off-grid не запрашиваются —
+        /// иначе у краёв стример постоянно бил бы в Addressables по несуществующим адресам.
+        /// </summary>
+        bool InGrid(ChunkCoord c)
+            => c.X >= 0 && c.X < gridSize.x && c.Y >= 0 && c.Y < gridSize.y;
 
         /// <summary>AABB чанка в мировых координатах.</summary>
         public Bounds ChunkWorldBounds(ChunkCoord c, float heightY = 100f)
@@ -290,7 +311,7 @@ namespace Postal.World
         /// </summary>
         public Task<bool> EnsureChunkLoaded(ChunkCoord coord)
         {
-            if (coord.Equals(MAIN)) return Task.FromResult(true);
+            if (!InGrid(coord)) return Task.FromResult(false);
 
             var entry = GetOrCreateEntry(coord);
 
@@ -389,9 +410,9 @@ namespace Postal.World
             FillRingAround(center, loadRadius, _desiredScratch);
             if (predictiveLoadAhead > 0)
                 FillRingAround(predicted, loadRadius, _desiredScratch);
-            _desiredScratch.Remove(MAIN); // главную не грузим — она boot-сцена.
 
             // 2) Заявка на загрузку всех желаемых, кого ещё нет в памяти.
+            //    Off-grid координаты RequestLoad отсечёт через InGrid().
             foreach (var c in _desiredScratch) RequestLoad(c);
 
             // 3) Отмена очереди и pending-unload для уже-загружаемых/уже-загруженных,
@@ -496,7 +517,7 @@ namespace Postal.World
 
         void RequestLoad(ChunkCoord c)
         {
-            if (c.Equals(MAIN)) return;
+            if (!InGrid(c)) return;
             var entry = GetOrCreateEntry(c);
 
             switch (entry.State)
@@ -598,7 +619,7 @@ namespace Postal.World
 
                 if (op.Status != AsyncOperationStatus.Succeeded)
                 {
-                    Debug.LogWarning($"[ChunkStreamer] ✗ Не удалось загрузить {entry.Coord} ('{addr}').");
+                    Debug.LogWarning($"[ChunkStream] ✗ Не удалось загрузить {entry.Coord} ('{addr}').");
                     Addressables.Release(op);
                     entry.State = ChunkState.Available; // existence известно, попробуем потом
                     entry.SceneHandle = default;
@@ -727,7 +748,7 @@ namespace Postal.World
             if (mb > memoryBudgetMB)
             {
                 Debug.LogWarning(
-                    $"[ChunkStreamer] Бюджет памяти превышен: {mb:F0}/{memoryBudgetMB:F0} МБ " +
+                    $"[ChunkStream] Бюджет памяти превышен: {mb:F0}/{memoryBudgetMB:F0} МБ " +
                     "(Profiler.GetTotalAllocatedMemoryLong, native+managed). " +
                     $"Активных чанков: {CountByState(ChunkState.Loaded)}. " +
                     "TODO: реализовать агрессивную выгрузку дальних.");
@@ -741,7 +762,7 @@ namespace Postal.World
             return n;
         }
 
-        void Log(string msg) => Debug.Log($"[ChunkStreamer] {msg}");
+        void Log(string msg) => Debug.Log($"[ChunkStream] {msg}");
 
         // ============================================================
         // Gizmo — информативно, плавно следит за игроком
