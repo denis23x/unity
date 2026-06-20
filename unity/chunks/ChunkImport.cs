@@ -1,6 +1,6 @@
 // Assets/Editor/ChunkImport.cs
 //
-// Batch-imports NN_MM.fbx chunks (exported from the Blender split script with
+// Batch-imports XX_YY.fbx chunks (exported from the Blender split script with
 // EXPORT_CENTERED=True, axis_forward='-Z', axis_up='Y') into individual Unity
 // scenes, positioning each scene's root so the grid centers on world origin.
 //
@@ -13,7 +13,9 @@
 //   u = (col + 0.5 - countA/2) * chunkSize
 //   v = (row + 0.5 - countB/2) * chunkSize
 // Grid dims (countA × countB) are derived from the FBX file set on disk;
-// chunkSize is set in this importer's UI (default = ChunkStream.DefaultChunkSize).
+// chunkSize is set in this importer's UI. Its default literal must be kept in
+// sync with ChunkStream.DefaultChunkSize by hand — the two scripts intentionally
+// don't reference each other so the importer compiles standalone.
 //
 // Mesh-bake pipeline:
 //   Blender's FBX export gives every instantiated chunk a non-identity local
@@ -39,7 +41,6 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using Postal.World; // ChunkStream.DefaultChunkSize — единый дефолт для размера чанка
 
 namespace ProjectName.EditorTools
 {
@@ -51,7 +52,6 @@ namespace ProjectName.EditorTools
         string destFolder;
         float  chunkSize;
         bool overwrite;
-        bool unpackPrefab;
         bool addMeshCollider;
         string sceneNamePrefix;
 
@@ -64,10 +64,10 @@ namespace ProjectName.EditorTools
         {
             sourceFolder    = EditorPrefs.GetString(PK + nameof(sourceFolder),    "Assets/Chunks");
             destFolder      = EditorPrefs.GetString(PK + nameof(destFolder),      "Assets/Scenes/Chunks");
-            chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       ChunkStream.DefaultChunkSize);
-            overwrite       = EditorPrefs.GetBool(PK + nameof(overwrite),       true);
-            unpackPrefab    = EditorPrefs.GetBool(PK + nameof(unpackPrefab),    false);
-            addMeshCollider = EditorPrefs.GetBool(PK + nameof(addMeshCollider), true);
+            // Default must match ChunkStream.DefaultChunkSize — kept in sync by hand.
+            chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       96f);
+            overwrite       = EditorPrefs.GetBool  (PK + nameof(overwrite),       true);
+            addMeshCollider = EditorPrefs.GetBool  (PK + nameof(addMeshCollider), true);
             sceneNamePrefix = EditorPrefs.GetString(PK + nameof(sceneNamePrefix), "Chunk_");
         }
 
@@ -77,7 +77,6 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetString(PK + nameof(destFolder),      destFolder);
             EditorPrefs.SetFloat (PK + nameof(chunkSize),       chunkSize);
             EditorPrefs.SetBool  (PK + nameof(overwrite),       overwrite);
-            EditorPrefs.SetBool  (PK + nameof(unpackPrefab),    unpackPrefab);
             EditorPrefs.SetBool  (PK + nameof(addMeshCollider), addMeshCollider);
             EditorPrefs.SetString(PK + nameof(sceneNamePrefix), sceneNamePrefix);
         }
@@ -91,25 +90,55 @@ namespace ProjectName.EditorTools
 
             EditorGUI.BeginChangeCheck();
 
-            sourceFolder    = EditorGUILayout.TextField("Source folder",     sourceFolder);
-            destFolder      = EditorGUILayout.TextField("Dest folder",       destFolder);
-            chunkSize       = EditorGUILayout.FloatField("Chunk size, m",    chunkSize);
-            sceneNamePrefix = EditorGUILayout.TextField("Scene name prefix", sceneNamePrefix);
+            sourceFolder = EditorGUILayout.TextField(
+                new GUIContent("Source folder",
+                    "Assets-relative folder holding the .fbx chunks exported from Blender. " +
+                    "Filenames must follow XX_YY.fbx exactly (XX = column index, YY = row index, " +
+                    "both zero-padded). Subfolders are not scanned."),
+                sourceFolder);
+
+            destFolder = EditorGUILayout.TextField(
+                new GUIContent("Dest folder",
+                    "Where to write the chunk .unity scenes. The folder is created if missing. " +
+                    "These scenes are then registered as Addressables and loaded by ChunkStream " +
+                    "using their filename (without the .unity extension) as the address."),
+                destFolder);
+
+            chunkSize = EditorGUILayout.FloatField(
+                new GUIContent("Chunk size, m",
+                    "Size of one grid cell in meters. MUST match what Blender used at export time " +
+                    "(chunk_w / chunk_h, derived from bbox / GRID_X in chunks_export.py) AND the " +
+                    "chunkSize field on ChunkStream in the runtime scene. A mismatch puts the Unity " +
+                    "grid at the wrong physical positions."),
+                chunkSize);
+
+            sceneNamePrefix = EditorGUILayout.TextField(
+                new GUIContent("Scene name prefix",
+                    "Prefix for each chunk .unity filename. Final form: <Prefix><XX>_<YY>.unity, " +
+                    "e.g. 'Chunk_04_07.unity'. Must match the format produced by " +
+                    "ChunkCoord.ToAddress() in ChunkStream — otherwise the streamer cannot find " +
+                    "the scenes in Addressables."),
+                sceneNamePrefix);
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
-            unpackPrefab    = EditorGUILayout.Toggle("Unpack model prefab",     unpackPrefab);
-            addMeshCollider = EditorGUILayout.Toggle("Add MeshCollider",        addMeshCollider);
-            overwrite       = EditorGUILayout.Toggle("Overwrite existing",      overwrite);
+
+            addMeshCollider = EditorGUILayout.Toggle(
+                new GUIContent("Add MeshCollider",
+                    "Attach a non-convex MeshCollider to every MeshFilter in the chunk after the " +
+                    "bake step. sharedMesh references the baked mesh, so collision matches the " +
+                    "visible geometry 1:1 and pivots around the same point as the renderer. " +
+                    "Convex is not required because chunks are static environment (no Rigidbody)."),
+                addMeshCollider);
+
+            overwrite = EditorGUILayout.Toggle(
+                new GUIContent("Overwrite existing",
+                    "Overwrite existing .unity scenes in Dest folder. When off, existing scenes " +
+                    "are skipped with a '[ChunkImport] Skip existing' log — useful for re-running " +
+                    "the importer after manually editing a few chunks."),
+                overwrite);
 
             if (EditorGUI.EndChangeCheck()) SavePrefs();
-
-            EditorGUILayout.Space();
-            EditorGUILayout.HelpBox(
-                "Filename pattern: NN_MM.fbx (e.g. 00_00.fbx, 07_03.fbx).\n" +
-                "NN = column (Unity X), MM = row (Unity Z).\n" +
-                "Matched against the Blender split script: EXPORT_CENTERED=True, axis_forward='-Z', axis_up='Y'.",
-                MessageType.Info);
 
             EditorGUILayout.Space();
             using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sourceFolder) || string.IsNullOrWhiteSpace(destFolder)))
@@ -154,7 +183,7 @@ namespace ProjectName.EditorTools
 
             if (entries.Count == 0)
             {
-                EditorUtility.DisplayDialog("Chunk Import", "Found 0 NN_MM.fbx files in source folder.", "OK");
+                EditorUtility.DisplayDialog("Chunk Import", "Found 0 XX_YY.fbx files in source folder.", "OK");
                 return;
             }
 
@@ -209,7 +238,7 @@ namespace ProjectName.EditorTools
 
         bool ImportOne(Entry e, int minA, int minB, int countA, int countB)
         {
-            // NN = col along Unity X, MM = row along Unity Z (matches the Blender split script).
+            // XX = col along Unity X, YY = row along Unity Z (matches the Blender split script).
             int col = e.a - minA;
             int row = e.b - minB;
 

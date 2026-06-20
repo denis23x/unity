@@ -11,8 +11,8 @@ using UnityEngine.ResourceManagement.ResourceProviders;
 namespace Postal.World
 {
     /// <summary>
-    /// Целочисленная координата чанка на сетке. Совпадает с NN/MM-индексом в имени
-    /// сцены Chunk_NN_MM.unity, который задаёт ChunkImport при экспорте FBX-чанков.
+    /// Целочисленная координата чанка на сетке. Совпадает с XX/YY-индексом в имени
+    /// сцены Chunk_XX_YY.unity, который задаёт ChunkImport при экспорте FBX-чанков.
     /// Перевод координаты в мировую позицию делается через ChunkStream.ChunkWorldCenter —
     /// формула зависит от gridSize и gridOrigin, поэтому здесь её намеренно нет.
     /// Y здесь — имя в координатах чанка, не путать с world Y (высотой).
@@ -68,7 +68,7 @@ namespace Postal.World
         // либо разово сбросить EditorPrefs ключи и Reset на компоненте.
         // ============================================================
 
-        public const float DefaultChunkSize     = 100f;
+        public const float DefaultChunkSize     = 96f;
         public const int   DefaultGridDimension = 8;
 
         // ============================================================
@@ -88,7 +88,7 @@ namespace Postal.World
         [SerializeField, Min(1f)] float chunkSize = DefaultChunkSize;
         [Tooltip("Размер сетки в чанках (X = столбцы, Y = ряды). Должен совпадать с GRID_X / GRID_Y " +
                  "в Blender-скрипте экспорта. Используется и для перевода мировой позиции игрока " +
-                 "в Chunk_NN_MM координату, и для отсечки запросов вне границ сетки.")]
+                 "в Chunk_XX_YY координату, и для отсечки запросов вне границ сетки.")]
         [SerializeField] Vector2Int gridSize = new Vector2Int(DefaultGridDimension, DefaultGridDimension);
         [SerializeField, Min(0)] int loadRadius = 1;
         [SerializeField, Min(1)] int unloadRadius = 2;

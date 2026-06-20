@@ -405,7 +405,7 @@ if DO_EXPORT:
                 o.select_set(True)
             bpy.context.view_layer.objects.active = mesh_objs[0]
 
-            # Output filename: NN_MM.fbx — NN = column (X), MM = row (Y/Z).
+            # Output filename: XX_YY.fbx — XX = column (X), YY = row (Y/Z).
             # The Unity ChunkImport expects exactly this naming convention.
             filepath = os.path.join(OUTPUT_DIR, f"{cx:02d}_{cy:02d}.fbx")
             bpy.ops.export_scene.fbx(
