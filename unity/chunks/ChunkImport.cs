@@ -31,6 +31,15 @@
 //   avoids both Project-window clutter and any duplication concern. The
 //   original FBX is left untouched and can still be re-imported normally.
 //
+// Optional Addressables integration:
+//   Define the scripting symbol ADDRESSABLES_PRESENT (Project Settings → Player →
+//   Other Settings → Scripting Define Symbols) when the com.unity.addressables
+//   package is installed. With the define a "Create Addressable" toggle appears;
+//   it registers every imported scene into a group named "Scenes" and rewrites
+//   each entry's address to the filename without extension (i.e. "Chunk_XX_YY"),
+//   matching ChunkCoord.ToAddress() in ChunkStream. Without the define the
+//   importer compiles and behaves identically minus that toggle.
+//
 // Menu: Tools → Chunks → Import FBX → Scenes
 
 using System.Collections.Generic;
@@ -39,6 +48,8 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditor.SceneManagement;
+using UnityEditor.AddressableAssets;
+using UnityEditor.AddressableAssets.Settings;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -53,6 +64,7 @@ namespace ProjectName.EditorTools
         float  chunkSize;
         bool overwrite;
         bool addMeshCollider;
+        bool createAddressable;
         string sceneNamePrefix;
 
         Vector2 scroll;
@@ -68,6 +80,7 @@ namespace ProjectName.EditorTools
             chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       96f);
             overwrite       = EditorPrefs.GetBool  (PK + nameof(overwrite),       true);
             addMeshCollider = EditorPrefs.GetBool  (PK + nameof(addMeshCollider), true);
+            createAddressable = EditorPrefs.GetBool(PK + nameof(createAddressable), true);
             sceneNamePrefix = EditorPrefs.GetString(PK + nameof(sceneNamePrefix), "Chunk_");
         }
 
@@ -78,6 +91,7 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetFloat (PK + nameof(chunkSize),       chunkSize);
             EditorPrefs.SetBool  (PK + nameof(overwrite),       overwrite);
             EditorPrefs.SetBool  (PK + nameof(addMeshCollider), addMeshCollider);
+            EditorPrefs.SetBool  (PK + nameof(createAddressable), createAddressable);
             EditorPrefs.SetString(PK + nameof(sceneNamePrefix), sceneNamePrefix);
         }
 
@@ -130,6 +144,16 @@ namespace ProjectName.EditorTools
                     "visible geometry 1:1 and pivots around the same point as the renderer. " +
                     "Convex is not required because chunks are static environment (no Rigidbody)."),
                 addMeshCollider);
+
+            createAddressable = EditorGUILayout.Toggle(
+                new GUIContent("Create Addressable",
+                    "After all chunks are written, register every .unity scene in the destination " +
+                    "folder into an Addressables group named 'Scenes' (created if missing) and " +
+                    "rewrite each entry's address to the filename without extension — i.e. " +
+                    "'Chunk_XX_YY'. That address format is exactly what ChunkCoord.ToAddress() " +
+                    "in ChunkStream looks up at runtime, so the streamer finds the scenes without " +
+                    "any extra setup. Turn off if you manage Addressables manually."),
+                createAddressable);
 
             overwrite = EditorGUILayout.Toggle(
                 new GUIContent("Overwrite existing",
@@ -231,6 +255,18 @@ namespace ProjectName.EditorTools
             AssetDatabase.Refresh();
 
             Debug.Log($"[ChunkImport] DONE. {written}/{entries.Count} scenes written to {destFolder}.");
+
+            if (createAddressable)
+            {
+                // Pick up every chunk scene in dest folder (newly written + previously
+                // skipped because of !overwrite) so re-runs always converge to a fully
+                // registered group, not just whatever was touched this pass.
+                var scenePaths = Directory.GetFiles(destFolder, $"{sceneNamePrefix}*.unity", SearchOption.TopDirectoryOnly)
+                    .Select(p => p.Replace('\\', '/'))
+                    .ToList();
+                if (scenePaths.Count > 0)
+                    RegisterScenesAsAddressables(scenePaths);
+            }
 
             EditorUtility.DisplayDialog("Chunk Import",
                 $"Done.\n{written}/{entries.Count} scenes written to:\n{destFolder}", "OK");
@@ -456,5 +492,60 @@ namespace ProjectName.EditorTools
             return mesh;
         }
 
+        // ── Addressables registration ──────────────────────────────────────
+        // Registers all scene paths into a single Addressables group named
+        // "Scenes" and rewrites every entry's address to the filename without
+        // extension. That last step is the "Simplify Addressable Names"
+        // operation, performed unconditionally on the whole group so old
+        // entries (registered before this code existed) are normalised too.
+        // The simplified address matches ChunkCoord.ToAddress() — that's the
+        // contract ChunkStream relies on for its Addressables lookups.
+
+        const string AddressableGroupName = "Scenes";
+
+        static void RegisterScenesAsAddressables(List<string> scenePaths)
+        {
+            var settings = AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+            {
+                Debug.LogWarning("[ChunkImport] Skipped Addressables registration: " +
+                    "AddressableAssetSettings is null. Open Window → Asset Management → " +
+                    "Addressables → Groups once so Unity creates the default settings asset, " +
+                    "then re-run the importer.");
+                return;
+            }
+
+            var group = settings.FindGroup(AddressableGroupName);
+            if (group == null)
+            {
+                // Create the group with fresh instances of the same schema types as
+                // the default group (typically BundledAssetGroupSchema +
+                // ContentUpdateGroupSchema) — that keeps the new group buildable
+                // out of the box without sharing schema references with the default.
+                var schemaTypes = settings.DefaultGroup != null
+                    ? settings.DefaultGroup.Schemas.Select(s => s.GetType()).ToArray()
+                    : System.Array.Empty<System.Type>();
+                group = settings.CreateGroup(AddressableGroupName, false, false, true, null, schemaTypes);
+            }
+
+            int registered = 0;
+            foreach (var path in scenePaths)
+            {
+                var guid = AssetDatabase.AssetPathToGUID(path);
+                if (string.IsNullOrEmpty(guid)) continue;
+                var entry = settings.CreateOrMoveEntry(guid, group, false, false);
+                if (entry != null) registered++;
+            }
+
+            // "Simplify Addressable Names" for every entry in the group: address
+            // becomes filename-without-extension, which is what ChunkStream uses.
+            foreach (var entry in group.entries)
+                entry.address = Path.GetFileNameWithoutExtension(entry.AssetPath);
+
+            settings.SetDirty(AddressableAssetSettings.ModificationEvent.BatchModification, null, true, true);
+
+            Debug.Log($"[ChunkImport] Addressables: registered {registered} scenes in group " +
+                      $"'{AddressableGroupName}'; addresses simplified to filename.");
+        }
     }
 }
