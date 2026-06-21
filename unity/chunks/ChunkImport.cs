@@ -52,6 +52,10 @@ using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Settings;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Pathfinding; // A* Pathfinding Pro — NavmeshPrefab for per-chunk recast bake
+// Disambiguates System.IO.Path from Pathfinding.Path (both pulled in by the
+// two `using`s above); every bare `Path.` in this file means System.IO.Path.
+using Path = System.IO.Path;
 
 namespace ProjectName.EditorTools
 {
@@ -65,6 +69,7 @@ namespace ProjectName.EditorTools
         bool overwrite;
         bool addMeshCollider;
         bool createAddressable;
+        bool createNavmesh;
         string sceneNamePrefix;
 
         Vector2 scroll;
@@ -79,9 +84,10 @@ namespace ProjectName.EditorTools
             // Default must match ChunkStream.DefaultChunkSize — kept in sync by hand.
             chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       96f);
             overwrite       = EditorPrefs.GetBool  (PK + nameof(overwrite),       true);
-            addMeshCollider = EditorPrefs.GetBool  (PK + nameof(addMeshCollider), true);
-            createAddressable = EditorPrefs.GetBool(PK + nameof(createAddressable), true);
-            sceneNamePrefix = EditorPrefs.GetString(PK + nameof(sceneNamePrefix), "Chunk_");
+            addMeshCollider   = EditorPrefs.GetBool  (PK + nameof(addMeshCollider),   true);
+            createAddressable = EditorPrefs.GetBool  (PK + nameof(createAddressable), true);
+            createNavmesh     = EditorPrefs.GetBool  (PK + nameof(createNavmesh),     true);
+            sceneNamePrefix   = EditorPrefs.GetString(PK + nameof(sceneNamePrefix),   "Chunk_");
         }
 
         void SavePrefs()
@@ -90,9 +96,10 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetString(PK + nameof(destFolder),      destFolder);
             EditorPrefs.SetFloat (PK + nameof(chunkSize),       chunkSize);
             EditorPrefs.SetBool  (PK + nameof(overwrite),       overwrite);
-            EditorPrefs.SetBool  (PK + nameof(addMeshCollider), addMeshCollider);
+            EditorPrefs.SetBool  (PK + nameof(addMeshCollider),   addMeshCollider);
             EditorPrefs.SetBool  (PK + nameof(createAddressable), createAddressable);
-            EditorPrefs.SetString(PK + nameof(sceneNamePrefix), sceneNamePrefix);
+            EditorPrefs.SetBool  (PK + nameof(createNavmesh),     createNavmesh);
+            EditorPrefs.SetString(PK + nameof(sceneNamePrefix),   sceneNamePrefix);
         }
 
         void OnGUI()
@@ -154,6 +161,16 @@ namespace ProjectName.EditorTools
                     "in ChunkStream looks up at runtime, so the streamer finds the scenes without " +
                     "any extra setup. Turn off if you manage Addressables manually."),
                 createAddressable);
+
+            createNavmesh = EditorGUILayout.Toggle(
+                new GUIContent("Create Navmesh",
+                    "Attach a Pathfinding.NavmeshPrefab (A* Pathfinding Pro) to the chunk root, " +
+                    "set its bounds to a cube of side = Chunk size centred on the root, and call " +
+                    "Scan() so the recast navmesh is baked at import time and serialised inside " +
+                    "the .unity scene. Result: every streamed chunk has navigation ready on load " +
+                    "without a runtime scan. Requires the A* Pathfinding Pro package — turn off " +
+                    "if you bake navigation differently or don't need it per chunk."),
+                createNavmesh);
 
             overwrite = EditorGUILayout.Toggle(
                 new GUIContent("Overwrite existing",
@@ -352,6 +369,26 @@ namespace ProjectName.EditorTools
                     mc.sharedMesh = mf.sharedMesh;
                     mc.convex = false;
                 }
+            }
+
+            if (createNavmesh)
+            {
+                // Attach A* Pathfinding NavmeshPrefab one level below the chunk
+                // root — on `inst`, the FBX-instantiated GameObject that owns
+                // the geometry. Bounds are a cube of side chunkSize centred on
+                // inst's local origin: XZ matches the chunk footprint exactly
+                // (so neighbouring chunks tile cleanly), Y is also chunkSize as
+                // a generous default for building heights.
+                //
+                // ScanAndSaveToFile() is what the inspector's "Scan and save"
+                // button calls — it bakes the recast navmesh AND writes the
+                // result into the serializedNavmesh field on the component.
+                // Plain Scan() only returns the data without persisting it, so
+                // SaveScene would have nothing to serialise and the loaded
+                // scene would carry an empty NavmeshPrefab at runtime.
+                var navmesh = inst.AddComponent<NavmeshPrefab>();
+                navmesh.bounds = new Bounds(Vector3.zero, new Vector3(chunkSize, chunkSize, chunkSize));
+                navmesh.ScanAndSaveToFile();
             }
 
             bool ok = EditorSceneManager.SaveScene(scene, scenePath);
