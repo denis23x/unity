@@ -8,6 +8,12 @@
 //   * Delete — removes the chunk scenes from disk by name prefix.
 //   * Open / Unload / Remove — manipulates the same chunk scenes in the
 //     current hierarchy at edit time.
+//   * Create Navmesh Prefab / Delete Tiles — adds A* NavmeshPrefab components
+//     to inst objects in every currently open chunk scene and bakes per-chunk
+//     recast tiles into Assets/{Tiles dest}/*.bytes; Delete Tiles nukes that
+//     folder. Navmesh creation is decoupled from Import so it can be re-run
+//     after the parent scene's RecastGraph settings change without
+//     re-importing FBX.
 //
 // Mapping between Blender export and Unity:
 //   Blender +X → Unity +X         (column index, first in filename, cx)
@@ -72,12 +78,11 @@ namespace ProjectName.EditorTools
         string sourceFolder;
         string destFolder;
         float  chunkSize;
-        bool overwrite;
         bool addMeshCollider;
-        bool createNavmesh;
         string sceneNamePrefix;
         string addressableGroupName;
         bool simplifyAddressableNames;
+        string tilesDestFolder;
 
         Vector2 scroll;
 
@@ -90,12 +95,13 @@ namespace ProjectName.EditorTools
             destFolder      = EditorPrefs.GetString(PK + nameof(destFolder),      "Assets/Scenes/Chunks");
             // Default must match ChunkStream.DefaultChunkSize — kept in sync by hand.
             chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       96f);
-            overwrite       = EditorPrefs.GetBool  (PK + nameof(overwrite),       true);
             addMeshCollider          = EditorPrefs.GetBool  (PK + nameof(addMeshCollider),          true);
-            createNavmesh            = EditorPrefs.GetBool  (PK + nameof(createNavmesh),            true);
             sceneNamePrefix          = EditorPrefs.GetString(PK + nameof(sceneNamePrefix),          "Chunk_");
             addressableGroupName     = EditorPrefs.GetString(PK + nameof(addressableGroupName),     "Scenes");
             simplifyAddressableNames = EditorPrefs.GetBool  (PK + nameof(simplifyAddressableNames), true);
+            // Default "Tiles" matches NavmeshPrefab.SaveToFile's hard-coded
+            // Assets/Tiles output path in A* Pathfinding Pro.
+            tilesDestFolder          = EditorPrefs.GetString(PK + nameof(tilesDestFolder),          "Tiles");
         }
 
         void SavePrefs()
@@ -103,12 +109,11 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetString(PK + nameof(sourceFolder),    sourceFolder);
             EditorPrefs.SetString(PK + nameof(destFolder),      destFolder);
             EditorPrefs.SetFloat (PK + nameof(chunkSize),       chunkSize);
-            EditorPrefs.SetBool  (PK + nameof(overwrite),       overwrite);
             EditorPrefs.SetBool  (PK + nameof(addMeshCollider),          addMeshCollider);
-            EditorPrefs.SetBool  (PK + nameof(createNavmesh),            createNavmesh);
             EditorPrefs.SetString(PK + nameof(sceneNamePrefix),          sceneNamePrefix);
             EditorPrefs.SetString(PK + nameof(addressableGroupName),     addressableGroupName);
             EditorPrefs.SetBool  (PK + nameof(simplifyAddressableNames), simplifyAddressableNames);
+            EditorPrefs.SetString(PK + nameof(tilesDestFolder),          tilesDestFolder);
         }
 
         void OnGUI()
@@ -150,6 +155,14 @@ namespace ProjectName.EditorTools
                     "the scenes in Addressables."),
                 sceneNamePrefix);
 
+            addMeshCollider = EditorGUILayout.Toggle(
+                new GUIContent("Add MeshCollider",
+                    "Attach a non-convex MeshCollider to every MeshFilter in the chunk after the " +
+                    "bake step. sharedMesh references the baked mesh, so collision matches the " +
+                    "visible geometry 1:1 and pivots around the same point as the renderer. " +
+                    "Convex is not required because chunks are static environment (no Rigidbody)."),
+                addMeshCollider);
+
             EditorGUILayout.Space();
 
             using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sourceFolder) || string.IsNullOrWhiteSpace(destFolder)))
@@ -182,6 +195,34 @@ namespace ProjectName.EditorTools
 
                 if (GUILayout.Button("Remove Chunk Scenes", GUILayout.Height(28)))
                     EditorApplication.delayCall += () => RemoveChunkScenes(sceneNamePrefix);
+            }
+
+            EditorGUILayout.Space();
+
+            // ── Chunk Navmesh Prefabs ────────────────────────────────────
+            EditorGUILayout.LabelField("Chunk Navmesh Prefabs", EditorStyles.boldLabel);
+
+            tilesDestFolder = EditorGUILayout.TextField(
+                new GUIContent("Tiles dest",
+                    "Folder name (under Assets/) that stores the per-chunk navmesh tile .bytes " +
+                    "files. A* Pathfinding Pro's NavmeshPrefab.SaveToFile is hard-coded to write " +
+                    "into Assets/Tiles, so changing this only affects Delete Tiles below — keep " +
+                    "it pointing at 'Tiles' unless you've patched the A* source to honor a " +
+                    "different path."),
+                tilesDestFolder);
+
+            EditorGUILayout.Space();
+
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sceneNamePrefix)))
+            {
+                if (GUILayout.Button("Create Navmesh Prefab", GUILayout.Height(28)))
+                    EditorApplication.delayCall += () => CreateNavmeshPrefabs(sceneNamePrefix, chunkSize);
+            }
+
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(tilesDestFolder)))
+            {
+                if (GUILayout.Button("Delete Tiles", GUILayout.Height(28)))
+                    EditorApplication.delayCall += () => DeleteTiles(tilesDestFolder);
             }
 
             EditorGUILayout.Space();
@@ -221,36 +262,6 @@ namespace ProjectName.EditorTools
                 if (GUILayout.Button("Delete Addressable", GUILayout.Height(28)))
                     EditorApplication.delayCall += () => DeleteAddressables(addressableGroupName);
             }
-
-            EditorGUILayout.Space();
-
-            // ── Output (legacy toggles, pending redesign) ────────────────
-            EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
-
-            addMeshCollider = EditorGUILayout.Toggle(
-                new GUIContent("Add MeshCollider",
-                    "Attach a non-convex MeshCollider to every MeshFilter in the chunk after the " +
-                    "bake step. sharedMesh references the baked mesh, so collision matches the " +
-                    "visible geometry 1:1 and pivots around the same point as the renderer. " +
-                    "Convex is not required because chunks are static environment (no Rigidbody)."),
-                addMeshCollider);
-
-            createNavmesh = EditorGUILayout.Toggle(
-                new GUIContent("Create Navmesh",
-                    "Attach a Pathfinding.NavmeshPrefab (A* Pathfinding Pro) to the chunk root, " +
-                    "set its bounds to a cube of side = Chunk size centred on the root, and call " +
-                    "Scan() so the recast navmesh is baked at import time and serialised inside " +
-                    "the .unity scene. Result: every streamed chunk has navigation ready on load " +
-                    "without a runtime scan. Requires the A* Pathfinding Pro package — turn off " +
-                    "if you bake navigation differently or don't need it per chunk."),
-                createNavmesh);
-
-            overwrite = EditorGUILayout.Toggle(
-                new GUIContent("Overwrite existing",
-                    "Overwrite existing .unity scenes in Dest folder. When off, existing scenes " +
-                    "are skipped with a '[ChunkManager] Skip existing' log — useful for re-running " +
-                    "the importer after manually editing a few chunks."),
-                overwrite);
 
             if (EditorGUI.EndChangeCheck()) SavePrefs();
 
@@ -383,6 +394,131 @@ namespace ProjectName.EditorTools
             return list;
         }
 
+        // ── Navmesh prefab pipeline ──────────────────────────────────────
+        // CreateNavmeshPrefabs operates on chunk scenes the user has already
+        // opened additively. For each chunk scene matching sceneNamePrefix it
+        // walks every immediate child of every root GameObject (i.e. each
+        // FBX `inst` produced by Import) and adds a NavmeshPrefab component.
+        // XZ size is the chunkSize (so neighbouring prefabs tile cleanly);
+        // Y size is taken from the parent scene's RecastGraph
+        // (forcedBoundsSize.y) so the navmesh covers the full vertical range
+        // the graph was configured for. The parent scene is whichever open
+        // scene carries the 'A*' GameObject; AstarPath.FindAstarPath()
+        // resolves it without us needing to know its exact path.
+        //
+        // ScanAndSaveToFile is the same call the inspector's "Scan and save"
+        // button uses. It writes a *.bytes TextAsset into Assets/Tiles (the
+        // path is hard-coded inside NavmeshPrefab.SaveToFile — tilesDestFolder
+        // is only used by DeleteTiles below) and assigns it back to
+        // serializedNavmesh on the component, so saving the chunk scene
+        // persists the reference and the runtime can re-apply tiles on load.
+
+        public static void CreateNavmeshPrefabs(string sceneNamePrefix, float chunkSize)
+        {
+            // FindAstarPath wakes up AstarPath.active in edit mode — the same
+            // pattern NavmeshPrefab.Reset() uses to find the recast graph.
+            AstarPath.FindAstarPath();
+            if (AstarPath.active == null || AstarPath.active.data.recastGraph == null)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    "No AstarPath with a RecastGraph found in any open scene. " +
+                    "Open the parent scene that contains the 'A*' GameObject before running this.",
+                    "OK");
+                return;
+            }
+
+            var graph = AstarPath.active.data.recastGraph;
+            float ySize = graph.forcedBoundsSize.y;
+            if (ySize <= 0f)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"RecastGraph forcedBoundsSize.y is {ySize}, cannot bake.", "OK");
+                return;
+            }
+
+            var scenes = CollectScenesByPrefix(sceneNamePrefix, requireLoaded: true);
+            if (scenes.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"No loaded chunk scenes with prefix '{sceneNamePrefix}'. " +
+                    "Use 'Open Chunks Additive' first.", "OK");
+                return;
+            }
+
+            int created = 0, reused = 0;
+            try
+            {
+                for (int i = 0; i < scenes.Count; i++)
+                {
+                    var scene = scenes[i];
+                    EditorUtility.DisplayProgressBar("Creating Navmesh Prefabs",
+                        $"{scene.name}  ({i + 1}/{scenes.Count})",
+                        (float)i / scenes.Count);
+
+                    bool sceneDirty = false;
+                    foreach (var root in scene.GetRootGameObjects())
+                    {
+                        for (int c = 0; c < root.transform.childCount; c++)
+                        {
+                            var inst = root.transform.GetChild(c).gameObject;
+                            var navmesh = inst.GetComponent<NavmeshPrefab>();
+                            if (navmesh == null)
+                            {
+                                navmesh = inst.AddComponent<NavmeshPrefab>();
+                                created++;
+                            }
+                            else
+                            {
+                                reused++;
+                            }
+                            navmesh.bounds = new Bounds(Vector3.zero, new Vector3(chunkSize, ySize, chunkSize));
+                            navmesh.ScanAndSaveToFile();
+                            sceneDirty = true;
+                        }
+                    }
+
+                    if (sceneDirty) EditorSceneManager.MarkSceneDirty(scene);
+                }
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+
+            Debug.Log($"[ChunkManager] NavmeshPrefab: {created} added, {reused} reused " +
+                      $"across {scenes.Count} chunk scene(s); Y size {ySize:F1}m from RecastGraph. " +
+                      "Scenes marked dirty — save them to persist the navmesh references.");
+        }
+
+        public static void DeleteTiles(string tilesDestFolder)
+        {
+            string folderPath = $"Assets/{tilesDestFolder}";
+            if (!AssetDatabase.IsValidFolder(folderPath))
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"Tiles folder not found:\n{folderPath}", "OK");
+                return;
+            }
+
+            int fileCount = Directory.GetFiles(folderPath, "*.bytes", SearchOption.AllDirectories).Length;
+            if (!EditorUtility.DisplayDialog("Delete Tiles",
+                    $"Delete folder '{folderPath}' and its {fileCount} .bytes file(s)?\n\n" +
+                    "Chunk scenes that reference these tiles will have a missing serializedNavmesh " +
+                    "until re-baked.",
+                    "Delete", "Cancel"))
+                return;
+
+            if (AssetDatabase.DeleteAsset(folderPath))
+            {
+                AssetDatabase.Refresh();
+                Debug.Log($"[ChunkManager] Deleted tiles folder: {folderPath} ({fileCount} .bytes files).");
+            }
+            else
+            {
+                Debug.LogError($"[ChunkManager] Failed to delete tiles folder: {folderPath}");
+            }
+        }
+
         // ── Import pipeline ──────────────────────────────────────────────
         // Wraps the FBX-scan + per-chunk write into a single entry point. The
         // body below is the original Run() logic verbatim — only the method
@@ -486,12 +622,6 @@ namespace ProjectName.EditorTools
             string baseName  = $"{sceneNamePrefix}{e.a:00}_{e.b:00}";
             string scenePath = $"{destFolder}/{baseName}.unity";
 
-            if (File.Exists(scenePath) && !overwrite)
-            {
-                Debug.Log($"[ChunkManager] Skip existing: {scenePath}");
-                return false;
-            }
-
             // Create scene additively — does not unload currently open scenes.
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
             EditorSceneManager.SetActiveScene(scene);
@@ -552,26 +682,6 @@ namespace ProjectName.EditorTools
                     mc.sharedMesh = mf.sharedMesh;
                     mc.convex = false;
                 }
-            }
-
-            if (createNavmesh)
-            {
-                // Attach A* Pathfinding NavmeshPrefab one level below the chunk
-                // root — on `inst`, the FBX-instantiated GameObject that owns
-                // the geometry. Bounds are a cube of side chunkSize centred on
-                // inst's local origin: XZ matches the chunk footprint exactly
-                // (so neighbouring chunks tile cleanly), Y is also chunkSize as
-                // a generous default for building heights.
-                //
-                // ScanAndSaveToFile() is what the inspector's "Scan and save"
-                // button calls — it bakes the recast navmesh AND writes the
-                // result into the serializedNavmesh field on the component.
-                // Plain Scan() only returns the data without persisting it, so
-                // SaveScene would have nothing to serialise and the loaded
-                // scene would carry an empty NavmeshPrefab at runtime.
-                var navmesh = inst.AddComponent<NavmeshPrefab>();
-                navmesh.bounds = new Bounds(Vector3.zero, new Vector3(chunkSize, chunkSize, chunkSize));
-                navmesh.ScanAndSaveToFile();
             }
 
             bool ok = EditorSceneManager.SaveScene(scene, scenePath);
