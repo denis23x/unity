@@ -1,8 +1,13 @@
-// Assets/Editor/ChunkImport.cs
+// Assets/Editor/ChunkManager.cs
 //
-// Batch-imports XX_YY.fbx chunks (exported from the Blender split script with
-// EXPORT_CENTERED=True, axis_forward='-Z', axis_up='Y') into individual Unity
-// scenes, positioning each scene's root so the grid centers on world origin.
+// Editor window that wraps the Blender-side chunk export pipeline:
+//   * Import — batch-imports XX_YY.fbx chunks (exported with
+//     EXPORT_CENTERED=True, axis_forward='-Z', axis_up='Y') into individual
+//     Unity scenes, positioning each scene's root so the grid centers on
+//     world origin.
+//   * Delete — removes the chunk scenes from disk by name prefix.
+//   * Open / Unload / Remove — manipulates the same chunk scenes in the
+//     current hierarchy at edit time.
 //
 // Mapping between Blender export and Unity:
 //   Blender +X → Unity +X         (column index, first in filename, cx)
@@ -13,7 +18,7 @@
 //   u = (col + 0.5 - countA/2) * chunkSize
 //   v = (row + 0.5 - countB/2) * chunkSize
 // Grid dims (countA × countB) are derived from the FBX file set on disk;
-// chunkSize is set in this importer's UI. Its default literal must be kept in
+// chunkSize is set in this window's UI. Its default literal must be kept in
 // sync with ChunkStream.DefaultChunkSize by hand — the two scripts intentionally
 // don't reference each other so the importer compiles standalone.
 //
@@ -40,7 +45,7 @@
 //   matching ChunkCoord.ToAddress() in ChunkStream. Without the define the
 //   importer compiles and behaves identically minus that toggle.
 //
-// Menu: Tools → Chunks → Import FBX → Scenes
+// Menu: Tools → Chunks → Chunk Manager
 
 using System.Collections.Generic;
 using System.IO;
@@ -59,9 +64,9 @@ using Path = System.IO.Path;
 
 namespace ProjectName.EditorTools
 {
-    public class ChunkImport : EditorWindow
+    public class ChunkManager : EditorWindow
     {
-        const string PK = "ChunkImport.";
+        const string PK = "ChunkManager.";
 
         string sourceFolder;
         string destFolder;
@@ -74,8 +79,8 @@ namespace ProjectName.EditorTools
 
         Vector2 scroll;
 
-        [MenuItem("Tools/Chunks/Import FBX → Scenes")]
-        static void Open() => GetWindow<ChunkImport>("Chunk Import");
+        [MenuItem("Tools/Chunks/Chunk Manager")]
+        static void Open() => GetWindow<ChunkManager>("Chunk Manager");
 
         void OnEnable()
         {
@@ -106,10 +111,10 @@ namespace ProjectName.EditorTools
         {
             scroll = EditorGUILayout.BeginScrollView(scroll);
 
-            EditorGUILayout.LabelField("FBX chunks → additive scenes", EditorStyles.boldLabel);
-            EditorGUILayout.Space();
-
             EditorGUI.BeginChangeCheck();
+
+            // ── Chunk Files ──────────────────────────────────────────────
+            EditorGUILayout.LabelField("Chunk Files", EditorStyles.boldLabel);
 
             sourceFolder = EditorGUILayout.TextField(
                 new GUIContent("Source folder",
@@ -134,7 +139,7 @@ namespace ProjectName.EditorTools
                 chunkSize);
 
             sceneNamePrefix = EditorGUILayout.TextField(
-                new GUIContent("Scene name prefix",
+                new GUIContent("Scene prefix",
                     "Prefix for each chunk .unity filename. Final form: <Prefix><XX>_<YY>.unity, " +
                     "e.g. 'Chunk_04_07.unity'. Must match the format produced by " +
                     "ChunkCoord.ToAddress() in ChunkStream — otherwise the streamer cannot find " +
@@ -142,6 +147,42 @@ namespace ProjectName.EditorTools
                 sceneNamePrefix);
 
             EditorGUILayout.Space();
+
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sourceFolder) || string.IsNullOrWhiteSpace(destFolder)))
+            {
+                if (GUILayout.Button("Import Chunks", GUILayout.Height(28)))
+                    EditorApplication.delayCall += ImportChunks;
+            }
+
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(destFolder) || string.IsNullOrWhiteSpace(sceneNamePrefix)))
+            {
+                if (GUILayout.Button("Delete Chunks", GUILayout.Height(28)))
+                    EditorApplication.delayCall += () => DeleteChunks(destFolder, sceneNamePrefix);
+            }
+
+            EditorGUILayout.Space();
+
+            // ── Chunk Scenes ─────────────────────────────────────────────
+            EditorGUILayout.LabelField("Chunk Scenes", EditorStyles.boldLabel);
+
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(destFolder) || string.IsNullOrWhiteSpace(sceneNamePrefix)))
+            {
+                if (GUILayout.Button("Open Chunks Additive", GUILayout.Height(28)))
+                    EditorApplication.delayCall += () => OpenChunksAdditive(destFolder, sceneNamePrefix);
+            }
+
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sceneNamePrefix)))
+            {
+                if (GUILayout.Button("Unload Chunk Scenes", GUILayout.Height(28)))
+                    EditorApplication.delayCall += () => UnloadChunkScenes(sceneNamePrefix);
+
+                if (GUILayout.Button("Remove Chunk Scenes", GUILayout.Height(28)))
+                    EditorApplication.delayCall += () => RemoveChunkScenes(sceneNamePrefix);
+            }
+
+            EditorGUILayout.Space();
+
+            // ── Output (legacy toggles, pending redesign) ────────────────
             EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
 
             addMeshCollider = EditorGUILayout.Toggle(
@@ -175,29 +216,151 @@ namespace ProjectName.EditorTools
             overwrite = EditorGUILayout.Toggle(
                 new GUIContent("Overwrite existing",
                     "Overwrite existing .unity scenes in Dest folder. When off, existing scenes " +
-                    "are skipped with a '[ChunkImport] Skip existing' log — useful for re-running " +
+                    "are skipped with a '[ChunkManager] Skip existing' log — useful for re-running " +
                     "the importer after manually editing a few chunks."),
                 overwrite);
 
             if (EditorGUI.EndChangeCheck()) SavePrefs();
-
-            EditorGUILayout.Space();
-            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sourceFolder) || string.IsNullOrWhiteSpace(destFolder)))
-            {
-                if (GUILayout.Button("Scan & import", GUILayout.Height(28)))
-                    EditorApplication.delayCall += Run;
-            }
 
             EditorGUILayout.EndScrollView();
         }
 
         struct Entry { public int a, b; public string assetPath; }
 
-        void Run()
+        // ── Reusable scene-file operations ───────────────────────────────
+        // Public-ish static helpers so other editor tools can call the same
+        // operations the window exposes without instantiating the window.
+
+        public static void DeleteChunks(string destFolder, string sceneNamePrefix)
+        {
+            if (!AssetDatabase.IsValidFolder(destFolder))
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"Dest folder not found or not a Unity asset folder:\n{destFolder}", "OK");
+                return;
+            }
+
+            var files = Directory.GetFiles(destFolder, $"{sceneNamePrefix}*.unity", SearchOption.TopDirectoryOnly)
+                .Select(p => p.Replace('\\', '/'))
+                .ToList();
+
+            if (files.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"No scenes matching '{sceneNamePrefix}*.unity' in:\n{destFolder}", "OK");
+                return;
+            }
+
+            if (!EditorUtility.DisplayDialog("Delete Chunks",
+                    $"Delete {files.Count} scene file(s) from\n{destFolder}?",
+                    "Delete", "Cancel"))
+                return;
+
+            int deleted = 0;
+            foreach (var path in files)
+                if (AssetDatabase.DeleteAsset(path)) deleted++;
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            Debug.Log($"[ChunkManager] Deleted {deleted}/{files.Count} chunk scenes from {destFolder}.");
+        }
+
+        public static void OpenChunksAdditive(string destFolder, string sceneNamePrefix)
+        {
+            if (!AssetDatabase.IsValidFolder(destFolder))
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"Dest folder not found or not a Unity asset folder:\n{destFolder}", "OK");
+                return;
+            }
+
+            var files = Directory.GetFiles(destFolder, $"{sceneNamePrefix}*.unity", SearchOption.TopDirectoryOnly)
+                .Select(p => p.Replace('\\', '/'))
+                .OrderBy(p => p)
+                .ToList();
+
+            if (files.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"No scenes matching '{sceneNamePrefix}*.unity' in:\n{destFolder}", "OK");
+                return;
+            }
+
+            // Skip paths already present in the hierarchy so re-clicking the
+            // button doesn't double-load anything (Unity would silently no-op
+            // but we also avoid resetting their loaded state).
+            var openPaths = new HashSet<string>();
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+                openPaths.Add(SceneManager.GetSceneAt(i).path);
+
+            int opened = 0;
+            foreach (var path in files)
+            {
+                if (openPaths.Contains(path)) continue;
+                EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
+                opened++;
+            }
+
+            Debug.Log($"[ChunkManager] Opened {opened}/{files.Count} chunk scenes additively from {destFolder}.");
+        }
+
+        public static void UnloadChunkScenes(string sceneNamePrefix)
+        {
+            var targets = CollectScenesByPrefix(sceneNamePrefix, requireLoaded: true);
+            if (targets.Count == 0)
+            {
+                Debug.Log($"[ChunkManager] No loaded chunk scenes with prefix '{sceneNamePrefix}'.");
+                return;
+            }
+
+            int unloaded = 0;
+            foreach (var s in targets)
+                if (EditorSceneManager.CloseScene(s, removeScene: false)) unloaded++;
+
+            Debug.Log($"[ChunkManager] Unloaded {unloaded}/{targets.Count} chunk scenes (prefix '{sceneNamePrefix}').");
+        }
+
+        public static void RemoveChunkScenes(string sceneNamePrefix)
+        {
+            var targets = CollectScenesByPrefix(sceneNamePrefix, requireLoaded: false);
+            if (targets.Count == 0)
+            {
+                Debug.Log($"[ChunkManager] No chunk scenes with prefix '{sceneNamePrefix}'.");
+                return;
+            }
+
+            int removed = 0;
+            foreach (var s in targets)
+                if (EditorSceneManager.CloseScene(s, removeScene: true)) removed++;
+
+            Debug.Log($"[ChunkManager] Removed {removed}/{targets.Count} chunk scenes (prefix '{sceneNamePrefix}').");
+        }
+
+        static List<Scene> CollectScenesByPrefix(string sceneNamePrefix, bool requireLoaded)
+        {
+            var list = new List<Scene>();
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var s = SceneManager.GetSceneAt(i);
+                if (string.IsNullOrEmpty(s.name)) continue;
+                if (!s.name.StartsWith(sceneNamePrefix)) continue;
+                if (requireLoaded && !s.isLoaded) continue;
+                list.Add(s);
+            }
+            return list;
+        }
+
+        // ── Import pipeline ──────────────────────────────────────────────
+        // Wraps the FBX-scan + per-chunk write into a single entry point. The
+        // body below is the original Run() logic verbatim — only the method
+        // name has changed.
+
+        void ImportChunks()
         {
             if (!AssetDatabase.IsValidFolder(sourceFolder))
             {
-                EditorUtility.DisplayDialog("Chunk Import",
+                EditorUtility.DisplayDialog("Chunk Manager",
                     $"Source folder not found or not a Unity asset folder:\n{sourceFolder}", "OK");
                 return;
             }
@@ -224,7 +387,7 @@ namespace ProjectName.EditorTools
 
             if (entries.Count == 0)
             {
-                EditorUtility.DisplayDialog("Chunk Import", "Found 0 XX_YY.fbx files in source folder.", "OK");
+                EditorUtility.DisplayDialog("Chunk Manager", "Found 0 XX_YY.fbx files in source folder.", "OK");
                 return;
             }
 
@@ -236,12 +399,12 @@ namespace ProjectName.EditorTools
             int countA = maxA - minA + 1;
             int countB = maxB - minB + 1;
 
-            Debug.Log($"[ChunkImport] {entries.Count} FBX files; " +
+            Debug.Log($"[ChunkManager] {entries.Count} FBX files; " +
                       $"grid a:{minA}..{maxA} ({countA}), b:{minB}..{maxB} ({countB}); cell={chunkSize}m");
 
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
             {
-                Debug.LogWarning("[ChunkImport] Aborted by user (unsaved scenes).");
+                Debug.LogWarning("[ChunkManager] Aborted by user (unsaved scenes).");
                 return;
             }
 
@@ -271,7 +434,7 @@ namespace ProjectName.EditorTools
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
 
-            Debug.Log($"[ChunkImport] DONE. {written}/{entries.Count} scenes written to {destFolder}.");
+            Debug.Log($"[ChunkManager] DONE. {written}/{entries.Count} scenes written to {destFolder}.");
 
             if (createAddressable)
             {
@@ -285,7 +448,7 @@ namespace ProjectName.EditorTools
                     RegisterScenesAsAddressables(scenePaths);
             }
 
-            EditorUtility.DisplayDialog("Chunk Import",
+            EditorUtility.DisplayDialog("Chunk Manager",
                 $"Done.\n{written}/{entries.Count} scenes written to:\n{destFolder}", "OK");
         }
 
@@ -305,7 +468,7 @@ namespace ProjectName.EditorTools
 
             if (File.Exists(scenePath) && !overwrite)
             {
-                Debug.Log($"[ChunkImport] Skip existing: {scenePath}");
+                Debug.Log($"[ChunkManager] Skip existing: {scenePath}");
                 return false;
             }
 
@@ -337,7 +500,7 @@ namespace ProjectName.EditorTools
             var fbx = AssetDatabase.LoadAssetAtPath<GameObject>(e.assetPath);
             if (fbx == null)
             {
-                Debug.LogError($"[ChunkImport] Could not load FBX asset: {e.assetPath}");
+                Debug.LogError($"[ChunkManager] Could not load FBX asset: {e.assetPath}");
                 EditorSceneManager.CloseScene(scene, removeScene: true);
                 return false;
             }
@@ -394,8 +557,8 @@ namespace ProjectName.EditorTools
             bool ok = EditorSceneManager.SaveScene(scene, scenePath);
             EditorSceneManager.CloseScene(scene, removeScene: true);
 
-            if (!ok) Debug.LogError($"[ChunkImport] Failed to save: {scenePath}");
-            else     Debug.Log($"[ChunkImport] {baseName}  →  root @ ({rootPos.x:F1}, {rootPos.y:F1}, {rootPos.z:F1})  [col={col}, row={row}]");
+            if (!ok) Debug.LogError($"[ChunkManager] Failed to save: {scenePath}");
+            else     Debug.Log($"[ChunkManager] {baseName}  →  root @ ({rootPos.x:F1}, {rootPos.y:F1}, {rootPos.z:F1})  [col={col}, row={row}]");
 
             return ok;
         }
@@ -454,7 +617,7 @@ namespace ProjectName.EditorTools
 
                 if (!source.isReadable)
                 {
-                    Debug.LogWarning($"[ChunkImport] {baseName}: source mesh '{source.name}' is not readable; skipping bake for this filter.");
+                    Debug.LogWarning($"[ChunkManager] {baseName}: source mesh '{source.name}' is not readable; skipping bake for this filter.");
                     continue;
                 }
 
@@ -545,7 +708,7 @@ namespace ProjectName.EditorTools
             var settings = AddressableAssetSettingsDefaultObject.Settings;
             if (settings == null)
             {
-                Debug.LogWarning("[ChunkImport] Skipped Addressables registration: " +
+                Debug.LogWarning("[ChunkManager] Skipped Addressables registration: " +
                     "AddressableAssetSettings is null. Open Window → Asset Management → " +
                     "Addressables → Groups once so Unity creates the default settings asset, " +
                     "then re-run the importer.");
@@ -581,7 +744,7 @@ namespace ProjectName.EditorTools
 
             settings.SetDirty(AddressableAssetSettings.ModificationEvent.BatchModification, null, true, true);
 
-            Debug.Log($"[ChunkImport] Addressables: registered {registered} scenes in group " +
+            Debug.Log($"[ChunkManager] Addressables: registered {registered} scenes in group " +
                       $"'{AddressableGroupName}'; addresses simplified to filename.");
         }
     }
