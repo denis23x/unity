@@ -14,6 +14,11 @@
 //     folder. Navmesh creation is decoupled from Import so it can be re-run
 //     after the parent scene's RecastGraph settings change without
 //     re-importing FBX.
+//   * Apply Navmesh Modifiers — recursively walks every open chunk scene and
+//     attaches RecastNavmeshModifier components to GameObjects whose name
+//     matches one of the user-defined key-prefix presets. Decoupled from
+//     Import for the same reason as the navmesh prefab step: settings can be
+//     iterated on without re-importing FBX.
 //
 // Mapping between Blender export and Unity:
 //   Blender +X → Unity +X         (column index, first in filename, cx)
@@ -83,6 +88,8 @@ namespace ProjectName.EditorTools
         string addressableGroupName;
         bool simplifyAddressableNames;
         string tilesDestFolder;
+        bool addNavmeshModifier;
+        List<NavmeshModifierConfig> navmeshModifierConfigs;
 
         Vector2 scroll;
 
@@ -102,6 +109,20 @@ namespace ProjectName.EditorTools
             // Default "Tiles" matches NavmeshPrefab.SaveToFile's hard-coded
             // Assets/Tiles output path in A* Pathfinding Pro.
             tilesDestFolder          = EditorPrefs.GetString(PK + nameof(tilesDestFolder),          "Tiles");
+            addNavmeshModifier       = EditorPrefs.GetBool  (PK + nameof(addNavmeshModifier),       false);
+
+            // EditorPrefs cannot store List<T> directly; round-trip via JsonUtility
+            // through a wrapper that gives the list a named field for the serializer.
+            var navmeshConfigsJson = EditorPrefs.GetString(PK + nameof(navmeshModifierConfigs), "");
+            if (!string.IsNullOrEmpty(navmeshConfigsJson))
+            {
+                var wrapper = JsonUtility.FromJson<NavmeshModifierConfigList>(navmeshConfigsJson);
+                navmeshModifierConfigs = wrapper?.items ?? new List<NavmeshModifierConfig>();
+            }
+            else
+            {
+                navmeshModifierConfigs = new List<NavmeshModifierConfig>();
+            }
         }
 
         void SavePrefs()
@@ -114,6 +135,9 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetString(PK + nameof(addressableGroupName),     addressableGroupName);
             EditorPrefs.SetBool  (PK + nameof(simplifyAddressableNames), simplifyAddressableNames);
             EditorPrefs.SetString(PK + nameof(tilesDestFolder),          tilesDestFolder);
+            EditorPrefs.SetBool  (PK + nameof(addNavmeshModifier),       addNavmeshModifier);
+            EditorPrefs.SetString(PK + nameof(navmeshModifierConfigs),
+                JsonUtility.ToJson(new NavmeshModifierConfigList { items = navmeshModifierConfigs }));
         }
 
         void OnGUI()
@@ -227,6 +251,109 @@ namespace ProjectName.EditorTools
 
             EditorGUILayout.Space();
 
+            // ── Chunk Navmesh Modifiers ──────────────────────────────────
+            EditorGUILayout.LabelField("Chunk Navmesh Modifiers", EditorStyles.boldLabel);
+
+            addNavmeshModifier = EditorGUILayout.Toggle(
+                new GUIContent("Add Navmesh Modifier",
+                    "When on, exposes a list of RecastNavmeshModifier configs that 'Apply Navmesh Modifiers' " +
+                    "below pushes into every currently open chunk scene matching 'Scene prefix'. Each config " +
+                    "targets GameObjects whose name starts with its Key prefix (search is recursive through " +
+                    "every root in the scene). Configs are evaluated top-to-bottom; the first matching prefix " +
+                    "wins per object so a more specific prefix should come before a more generic one."),
+                addNavmeshModifier);
+
+            if (addNavmeshModifier)
+            {
+                EditorGUILayout.Space();
+
+                int removeIndex = -1;
+                for (int i = 0; i < navmeshModifierConfigs.Count; i++)
+                {
+                    var cfg = navmeshModifierConfigs[i];
+
+                    EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+                    EditorGUILayout.BeginHorizontal();
+                    cfg.foldout = EditorGUILayout.Foldout(cfg.foldout,
+                        string.IsNullOrEmpty(cfg.keyPrefix) ? $"Config {i + 1}" : cfg.keyPrefix, true);
+                    if (GUILayout.Button("Remove", GUILayout.Width(70))) removeIndex = i;
+                    EditorGUILayout.EndHorizontal();
+
+                    if (cfg.foldout)
+                    {
+                        cfg.keyPrefix = EditorGUILayout.TextField(
+                            new GUIContent("Key prefix",
+                                "Name prefix used to match GameObjects inside open chunk scenes. " +
+                                "Any object whose name starts with this string gets a RecastNavmeshModifier."),
+                            cfg.keyPrefix);
+
+                        cfg.mode = (RecastNavmeshModifier.Mode)EditorGUILayout.EnumPopup(
+                            new GUIContent("Mode",
+                                "Surface rasterization mode. WalkableSurface = standard ground; " +
+                                "UnwalkableSurface = blocks the scan; WalkableSurfaceWithSeam / WithTag " +
+                                "use Surface ID to split or tag the resulting area."),
+                            cfg.mode);
+
+                        cfg.surfaceID = EditorGUILayout.IntField(
+                            new GUIContent("Surface ID",
+                                "Voxel area for the mesh. Only meaningful with WalkableSurfaceWithSeam and " +
+                                "WalkableSurfaceWithTag — ignored by the other modes."),
+                            cfg.surfaceID);
+
+                        cfg.geometrySource = (RecastNavmeshModifier.GeometrySource)EditorGUILayout.EnumPopup(
+                            new GUIContent("Geometry source",
+                                "Where the recast scan reads geometry from. Auto picks MeshFilter or " +
+                                "Collider depending on what the GameObject has."),
+                            cfg.geometrySource);
+
+                        cfg.includeInScan = (RecastNavmeshModifier.ScanInclusion)EditorGUILayout.EnumPopup(
+                            new GUIContent("Include in scan",
+                                "Whether the object is included in the recast scan. Auto follows the graph's " +
+                                "default include rules; AlwaysInclude / AlwaysExclude override them."),
+                            cfg.includeInScan);
+
+                        cfg.dynamic = EditorGUILayout.Toggle(
+                            new GUIContent("Dynamic",
+                                "Enable if the object will move at runtime. Chunk geometry is static, so leave " +
+                                "off unless this specific object is animated or moved."),
+                            cfg.dynamic);
+
+                        cfg.solid = EditorGUILayout.Toggle(
+                            new GUIContent("Solid",
+                                "If on, the mesh is treated as solid and its interior becomes unwalkable. " +
+                                "Useful for one-sided shells where the inside should also block agents."),
+                            cfg.solid);
+                    }
+
+                    EditorGUILayout.EndVertical();
+                }
+
+                if (removeIndex >= 0)
+                {
+                    navmeshModifierConfigs.RemoveAt(removeIndex);
+                    SavePrefs();
+                }
+
+                if (GUILayout.Button("Add Config"))
+                {
+                    navmeshModifierConfigs.Add(new NavmeshModifierConfig());
+                    SavePrefs();
+                }
+
+                EditorGUILayout.Space();
+
+                using (new EditorGUI.DisabledScope(
+                           string.IsNullOrWhiteSpace(sceneNamePrefix) || navmeshModifierConfigs.Count == 0))
+                {
+                    if (GUILayout.Button("Apply Navmesh Modifiers", GUILayout.Height(28)))
+                        EditorApplication.delayCall += () =>
+                            ApplyNavmeshModifiers(sceneNamePrefix, navmeshModifierConfigs);
+                }
+
+                EditorGUILayout.Space();
+            }
+
             // ── Chunk Addressables ───────────────────────────────────────
             EditorGUILayout.LabelField("Chunk Addressables", EditorStyles.boldLabel);
 
@@ -269,6 +396,34 @@ namespace ProjectName.EditorTools
         }
 
         struct Entry { public int a, b; public string assetPath; }
+
+        // Per-prefix RecastNavmeshModifier preset. Serialized via JsonUtility into
+        // EditorPrefs so the window's config survives domain reloads and Unity
+        // restarts. Field set mirrors the public surface of
+        // RecastNavmeshModifier (A* Pathfinding Pro v5).
+        [System.Serializable]
+        public class NavmeshModifierConfig
+        {
+            public string keyPrefix = "";
+            public RecastNavmeshModifier.Mode mode = RecastNavmeshModifier.Mode.WalkableSurface;
+            public int surfaceID = 1;
+            public RecastNavmeshModifier.GeometrySource geometrySource = RecastNavmeshModifier.GeometrySource.Auto;
+            public RecastNavmeshModifier.ScanInclusion includeInScan = RecastNavmeshModifier.ScanInclusion.Auto;
+            public bool dynamic = true;
+            public bool solid = false;
+
+            // UI-only fold state — kept out of JSON so it doesn't bloat EditorPrefs
+            // and so toggling it in the inspector isn't treated as a config change.
+            [System.NonSerialized] public bool foldout = true;
+        }
+
+        // JsonUtility refuses to serialise a bare List<T>, so the list is wrapped
+        // in a named-field container that the serializer can introspect.
+        [System.Serializable]
+        class NavmeshModifierConfigList
+        {
+            public List<NavmeshModifierConfig> items = new List<NavmeshModifierConfig>();
+        }
 
         // ── Reusable scene-file operations ───────────────────────────────
         // Public-ish static helpers so other editor tools can call the same
@@ -517,6 +672,96 @@ namespace ProjectName.EditorTools
             {
                 Debug.LogError($"[ChunkManager] Failed to delete tiles folder: {folderPath}");
             }
+        }
+
+        // ── Navmesh modifier pipeline ────────────────────────────────────
+        // Walks every currently open chunk scene that matches sceneNamePrefix
+        // and recursively scans every GameObject under each root. For each
+        // object whose name starts with a config's keyPrefix, attaches (or
+        // reuses) a RecastNavmeshModifier and copies the config's fields onto
+        // it. Configs are evaluated in list order and the first matching
+        // prefix wins — list more specific prefixes before generic ones.
+        //
+        // Scenes are marked dirty but NOT saved automatically; the user must
+        // save them (e.g. via File → Save) so the components persist. This
+        // mirrors how CreateNavmeshPrefabs above leaves persistence to the
+        // user, keeping the two navmesh steps consistent.
+
+        public static void ApplyNavmeshModifiers(string sceneNamePrefix, List<NavmeshModifierConfig> configs)
+        {
+            var validConfigs = configs
+                .Where(c => !string.IsNullOrWhiteSpace(c.keyPrefix))
+                .ToList();
+            if (validConfigs.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    "No navmesh modifier configs with a Key prefix set.", "OK");
+                return;
+            }
+
+            var scenes = CollectScenesByPrefix(sceneNamePrefix, requireLoaded: true);
+            if (scenes.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"No loaded chunk scenes with prefix '{sceneNamePrefix}'. " +
+                    "Use 'Open Chunks Additive' first.", "OK");
+                return;
+            }
+
+            int added = 0, updated = 0, matched = 0;
+            try
+            {
+                for (int i = 0; i < scenes.Count; i++)
+                {
+                    var scene = scenes[i];
+                    EditorUtility.DisplayProgressBar("Applying Navmesh Modifiers",
+                        $"{scene.name}  ({i + 1}/{scenes.Count})",
+                        (float)i / scenes.Count);
+
+                    bool sceneDirty = false;
+                    foreach (var root in scene.GetRootGameObjects())
+                    {
+                        foreach (var t in root.GetComponentsInChildren<Transform>(includeInactive: true))
+                        {
+                            var go = t.gameObject;
+                            var name = go.name;
+                            foreach (var cfg in validConfigs)
+                            {
+                                if (!name.StartsWith(cfg.keyPrefix)) continue;
+                                matched++;
+                                var mod = go.GetComponent<RecastNavmeshModifier>();
+                                if (mod == null)
+                                {
+                                    mod = go.AddComponent<RecastNavmeshModifier>();
+                                    added++;
+                                }
+                                else
+                                {
+                                    updated++;
+                                }
+                                mod.mode           = cfg.mode;
+                                mod.surfaceID      = cfg.surfaceID;
+                                mod.geometrySource = cfg.geometrySource;
+                                mod.includeInScan  = cfg.includeInScan;
+                                mod.dynamic        = cfg.dynamic;
+                                mod.solid          = cfg.solid;
+                                sceneDirty = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (sceneDirty) EditorSceneManager.MarkSceneDirty(scene);
+                }
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+
+            Debug.Log($"[ChunkManager] RecastNavmeshModifier: {added} added, {updated} updated " +
+                      $"({matched} matched) across {scenes.Count} chunk scene(s); " +
+                      $"{validConfigs.Count} config(s) used. Scenes marked dirty — save them to persist.");
         }
 
         // ── Import pipeline ──────────────────────────────────────────────
