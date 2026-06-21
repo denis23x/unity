@@ -36,14 +36,15 @@
 //   avoids both Project-window clutter and any duplication concern. The
 //   original FBX is left untouched and can still be re-imported normally.
 //
-// Optional Addressables integration:
-//   Define the scripting symbol ADDRESSABLES_PRESENT (Project Settings → Player →
-//   Other Settings → Scripting Define Symbols) when the com.unity.addressables
-//   package is installed. With the define a "Create Addressable" toggle appears;
-//   it registers every imported scene into a group named "Scenes" and rewrites
-//   each entry's address to the filename without extension (i.e. "Chunk_XX_YY"),
-//   matching ChunkCoord.ToAddress() in ChunkStream. Without the define the
-//   importer compiles and behaves identically minus that toggle.
+// Addressables integration:
+//   The "Chunk Addressables" panel exposes Create / Delete buttons that manage
+//   a single group (name comes from the "Group Name" field, default "Scenes").
+//   Create adds every scene matching <Scene prefix>*.unity in Dest folder into
+//   that group; with "Simplify Names" enabled each entry's address becomes the
+//   filename without extension (i.e. "Chunk_XX_YY"), matching
+//   ChunkCoord.ToAddress() in ChunkStream. Delete removes the group along with
+//   every entry it owns. Import does NOT touch Addressables — registration is
+//   a separate, explicit step.
 //
 // Menu: Tools → Chunks → Chunk Manager
 
@@ -73,9 +74,10 @@ namespace ProjectName.EditorTools
         float  chunkSize;
         bool overwrite;
         bool addMeshCollider;
-        bool createAddressable;
         bool createNavmesh;
         string sceneNamePrefix;
+        string addressableGroupName;
+        bool simplifyAddressableNames;
 
         Vector2 scroll;
 
@@ -89,10 +91,11 @@ namespace ProjectName.EditorTools
             // Default must match ChunkStream.DefaultChunkSize — kept in sync by hand.
             chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       96f);
             overwrite       = EditorPrefs.GetBool  (PK + nameof(overwrite),       true);
-            addMeshCollider   = EditorPrefs.GetBool  (PK + nameof(addMeshCollider),   true);
-            createAddressable = EditorPrefs.GetBool  (PK + nameof(createAddressable), true);
-            createNavmesh     = EditorPrefs.GetBool  (PK + nameof(createNavmesh),     true);
-            sceneNamePrefix   = EditorPrefs.GetString(PK + nameof(sceneNamePrefix),   "Chunk_");
+            addMeshCollider          = EditorPrefs.GetBool  (PK + nameof(addMeshCollider),          true);
+            createNavmesh            = EditorPrefs.GetBool  (PK + nameof(createNavmesh),            true);
+            sceneNamePrefix          = EditorPrefs.GetString(PK + nameof(sceneNamePrefix),          "Chunk_");
+            addressableGroupName     = EditorPrefs.GetString(PK + nameof(addressableGroupName),     "Scenes");
+            simplifyAddressableNames = EditorPrefs.GetBool  (PK + nameof(simplifyAddressableNames), true);
         }
 
         void SavePrefs()
@@ -101,10 +104,11 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetString(PK + nameof(destFolder),      destFolder);
             EditorPrefs.SetFloat (PK + nameof(chunkSize),       chunkSize);
             EditorPrefs.SetBool  (PK + nameof(overwrite),       overwrite);
-            EditorPrefs.SetBool  (PK + nameof(addMeshCollider),   addMeshCollider);
-            EditorPrefs.SetBool  (PK + nameof(createAddressable), createAddressable);
-            EditorPrefs.SetBool  (PK + nameof(createNavmesh),     createNavmesh);
-            EditorPrefs.SetString(PK + nameof(sceneNamePrefix),   sceneNamePrefix);
+            EditorPrefs.SetBool  (PK + nameof(addMeshCollider),          addMeshCollider);
+            EditorPrefs.SetBool  (PK + nameof(createNavmesh),            createNavmesh);
+            EditorPrefs.SetString(PK + nameof(sceneNamePrefix),          sceneNamePrefix);
+            EditorPrefs.SetString(PK + nameof(addressableGroupName),     addressableGroupName);
+            EditorPrefs.SetBool  (PK + nameof(simplifyAddressableNames), simplifyAddressableNames);
         }
 
         void OnGUI()
@@ -182,6 +186,44 @@ namespace ProjectName.EditorTools
 
             EditorGUILayout.Space();
 
+            // ── Chunk Addressables ───────────────────────────────────────
+            EditorGUILayout.LabelField("Chunk Addressables", EditorStyles.boldLabel);
+
+            addressableGroupName = EditorGUILayout.TextField(
+                new GUIContent("Group Name",
+                    "Name of the Addressables group used by Create / Delete below. Created if " +
+                    "missing on Create; Delete looks the group up by this exact name and removes " +
+                    "it along with every entry it owns."),
+                addressableGroupName);
+
+            simplifyAddressableNames = EditorGUILayout.Toggle(
+                new GUIContent("Simplify Names",
+                    "After registering, rewrite every entry's address to the filename without " +
+                    "extension (e.g. 'Chunk_04_07'). That format matches ChunkCoord.ToAddress() " +
+                    "in ChunkStream, so the streamer can find the scenes without extra setup. " +
+                    "Turn off to keep the default GUID-based addresses."),
+                simplifyAddressableNames);
+
+            EditorGUILayout.Space();
+
+            using (new EditorGUI.DisabledScope(
+                       string.IsNullOrWhiteSpace(destFolder) ||
+                       string.IsNullOrWhiteSpace(sceneNamePrefix) ||
+                       string.IsNullOrWhiteSpace(addressableGroupName)))
+            {
+                if (GUILayout.Button("Create Addressable", GUILayout.Height(28)))
+                    EditorApplication.delayCall += () =>
+                        CreateAddressables(destFolder, sceneNamePrefix, addressableGroupName, simplifyAddressableNames);
+            }
+
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(addressableGroupName)))
+            {
+                if (GUILayout.Button("Delete Addressable", GUILayout.Height(28)))
+                    EditorApplication.delayCall += () => DeleteAddressables(addressableGroupName);
+            }
+
+            EditorGUILayout.Space();
+
             // ── Output (legacy toggles, pending redesign) ────────────────
             EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
 
@@ -192,16 +234,6 @@ namespace ProjectName.EditorTools
                     "visible geometry 1:1 and pivots around the same point as the renderer. " +
                     "Convex is not required because chunks are static environment (no Rigidbody)."),
                 addMeshCollider);
-
-            createAddressable = EditorGUILayout.Toggle(
-                new GUIContent("Create Addressable",
-                    "After all chunks are written, register every .unity scene in the destination " +
-                    "folder into an Addressables group named 'Scenes' (created if missing) and " +
-                    "rewrite each entry's address to the filename without extension — i.e. " +
-                    "'Chunk_XX_YY'. That address format is exactly what ChunkCoord.ToAddress() " +
-                    "in ChunkStream looks up at runtime, so the streamer finds the scenes without " +
-                    "any extra setup. Turn off if you manage Addressables manually."),
-                createAddressable);
 
             createNavmesh = EditorGUILayout.Toggle(
                 new GUIContent("Create Navmesh",
@@ -435,18 +467,6 @@ namespace ProjectName.EditorTools
             AssetDatabase.Refresh();
 
             Debug.Log($"[ChunkManager] DONE. {written}/{entries.Count} scenes written to {destFolder}.");
-
-            if (createAddressable)
-            {
-                // Pick up every chunk scene in dest folder (newly written + previously
-                // skipped because of !overwrite) so re-runs always converge to a fully
-                // registered group, not just whatever was touched this pass.
-                var scenePaths = Directory.GetFiles(destFolder, $"{sceneNamePrefix}*.unity", SearchOption.TopDirectoryOnly)
-                    .Select(p => p.Replace('\\', '/'))
-                    .ToList();
-                if (scenePaths.Count > 0)
-                    RegisterScenesAsAddressables(scenePaths);
-            }
 
             EditorUtility.DisplayDialog("Chunk Manager",
                 $"Done.\n{written}/{entries.Count} scenes written to:\n{destFolder}", "OK");
@@ -692,18 +712,17 @@ namespace ProjectName.EditorTools
             return mesh;
         }
 
-        // ── Addressables registration ──────────────────────────────────────
-        // Registers all scene paths into a single Addressables group named
-        // "Scenes" and rewrites every entry's address to the filename without
-        // extension. That last step is the "Simplify Addressable Names"
-        // operation, performed unconditionally on the whole group so old
-        // entries (registered before this code existed) are normalised too.
-        // The simplified address matches ChunkCoord.ToAddress() — that's the
-        // contract ChunkStream relies on for its Addressables lookups.
+        // ── Addressables ──────────────────────────────────────────────────
+        // Create — registers every <prefix>*.unity scene in destFolder into a
+        // group with the given name (created if missing). When simplifyNames is
+        // true each entry's address is rewritten to the filename without
+        // extension — the "Simplify Addressable Names" operation, performed on
+        // the whole group so old entries are normalised too. The simplified
+        // address matches ChunkCoord.ToAddress() in ChunkStream.
+        // Delete — removes the group and all entries it owns in a single
+        // RemoveGroup call (Addressables cascades entry removal automatically).
 
-        const string AddressableGroupName = "Scenes";
-
-        static void RegisterScenesAsAddressables(List<string> scenePaths)
+        public static void CreateAddressables(string destFolder, string sceneNamePrefix, string groupName, bool simplifyNames)
         {
             var settings = AddressableAssetSettingsDefaultObject.Settings;
             if (settings == null)
@@ -711,11 +730,29 @@ namespace ProjectName.EditorTools
                 Debug.LogWarning("[ChunkManager] Skipped Addressables registration: " +
                     "AddressableAssetSettings is null. Open Window → Asset Management → " +
                     "Addressables → Groups once so Unity creates the default settings asset, " +
-                    "then re-run the importer.");
+                    "then try again.");
                 return;
             }
 
-            var group = settings.FindGroup(AddressableGroupName);
+            if (!AssetDatabase.IsValidFolder(destFolder))
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"Dest folder not found or not a Unity asset folder:\n{destFolder}", "OK");
+                return;
+            }
+
+            var scenePaths = Directory.GetFiles(destFolder, $"{sceneNamePrefix}*.unity", SearchOption.TopDirectoryOnly)
+                .Select(p => p.Replace('\\', '/'))
+                .ToList();
+
+            if (scenePaths.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"No scenes matching '{sceneNamePrefix}*.unity' in:\n{destFolder}", "OK");
+                return;
+            }
+
+            var group = settings.FindGroup(groupName);
             if (group == null)
             {
                 // Create the group with fresh instances of the same schema types as
@@ -725,7 +762,7 @@ namespace ProjectName.EditorTools
                 var schemaTypes = settings.DefaultGroup != null
                     ? settings.DefaultGroup.Schemas.Select(s => s.GetType()).ToArray()
                     : System.Array.Empty<System.Type>();
-                group = settings.CreateGroup(AddressableGroupName, false, false, true, null, schemaTypes);
+                group = settings.CreateGroup(groupName, false, false, true, null, schemaTypes);
             }
 
             int registered = 0;
@@ -737,15 +774,47 @@ namespace ProjectName.EditorTools
                 if (entry != null) registered++;
             }
 
-            // "Simplify Addressable Names" for every entry in the group: address
-            // becomes filename-without-extension, which is what ChunkStream uses.
-            foreach (var entry in group.entries)
-                entry.address = Path.GetFileNameWithoutExtension(entry.AssetPath);
+            if (simplifyNames)
+            {
+                foreach (var entry in group.entries)
+                    entry.address = Path.GetFileNameWithoutExtension(entry.AssetPath);
+            }
 
             settings.SetDirty(AddressableAssetSettings.ModificationEvent.BatchModification, null, true, true);
 
-            Debug.Log($"[ChunkManager] Addressables: registered {registered} scenes in group " +
-                      $"'{AddressableGroupName}'; addresses simplified to filename.");
+            Debug.Log($"[ChunkManager] Addressables: registered {registered} scenes in group '{groupName}'" +
+                      (simplifyNames ? "; addresses simplified to filename." : "."));
+        }
+
+        public static void DeleteAddressables(string groupName)
+        {
+            var settings = AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+            {
+                Debug.LogWarning("[ChunkManager] Skipped Addressables delete: AddressableAssetSettings is null.");
+                return;
+            }
+
+            var group = settings.FindGroup(groupName);
+            if (group == null)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"Addressables group '{groupName}' not found.", "OK");
+                return;
+            }
+
+            int entryCount = group.entries.Count;
+            if (!EditorUtility.DisplayDialog("Delete Addressable",
+                    $"Delete Addressables group '{groupName}' and its {entryCount} entry(ies)?",
+                    "Delete", "Cancel"))
+                return;
+
+            // RemoveGroup disposes the group's entries as part of the same call;
+            // no need to iterate entries and RemoveAssetEntry one by one.
+            settings.RemoveGroup(group);
+            settings.SetDirty(AddressableAssetSettings.ModificationEvent.BatchModification, null, true, true);
+
+            Debug.Log($"[ChunkManager] Addressables: removed group '{groupName}' ({entryCount} entries).");
         }
     }
 }
