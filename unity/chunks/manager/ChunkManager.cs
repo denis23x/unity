@@ -1,4 +1,4 @@
-// Assets/Editor/ChunkManager.cs
+// Assets/Editor/ChunkManager/ChunkManager.cs
 //
 // Editor window that wraps the Blender-side chunk export pipeline:
 //   * Import — batch-imports XX_YY.fbx chunks (exported with
@@ -57,6 +57,10 @@
 //   every entry it owns. Import does NOT touch Addressables — registration is
 //   a separate, explicit step.
 //
+// UI: UI Toolkit. Layout lives in ChunkManager.uxml, styles in ChunkManager.uss
+// (both loaded at runtime via MonoScript-relative paths, so the folder can be
+// dropped anywhere under Assets/ and the window finds its own resources).
+//
 // Menu: Tools → Chunks → Chunk Manager
 
 using System.Collections.Generic;
@@ -67,8 +71,10 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Settings;
+using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UIElements;
 using Pathfinding; // A* Pathfinding Pro — NavmeshPrefab for per-chunk recast bake
 // Disambiguates System.IO.Path from Pathfinding.Path (both pulled in by the
 // two `using`s above); every bare `Path.` in this file means System.IO.Path.
@@ -80,18 +86,24 @@ namespace ProjectName.EditorTools
     {
         const string PK = "ChunkManager.";
 
+        // Persisted settings
         string sourceFolder;
         string destFolder;
         float  chunkSize;
-        bool addMeshCollider;
+        bool   addMeshCollider;
         string sceneNamePrefix;
         string addressableGroupName;
-        bool simplifyAddressableNames;
+        bool   simplifyAddressableNames;
         string tilesDestFolder;
-        bool addNavmeshModifier;
+        bool   addNavmeshModifier;
         List<NavmeshModifierConfig> navmeshModifierConfigs;
 
-        Vector2 scroll;
+        // UI Toolkit element refs (queried once in CreateGUI)
+        VisualElement configsContainer;
+        VisualElement modifiersBody;
+        Button btnImport, btnDeleteChunks, btnOpen, btnUnload, btnRemove;
+        Button btnCreatePrefab, btnDeleteTiles, btnAddConfig, btnApplyModifiers;
+        Button btnCreateAddr, btnDeleteAddr;
 
         [MenuItem("Tools/Chunks/Chunk Manager")]
         static void Open() => GetWindow<ChunkManager>("Chunk Manager");
@@ -140,259 +152,356 @@ namespace ProjectName.EditorTools
                 JsonUtility.ToJson(new NavmeshModifierConfigList { items = navmeshModifierConfigs }));
         }
 
-        void OnGUI()
+        // ── UI Toolkit setup ────────────────────────────────────────────────
+        // CreateGUI is the UI Toolkit counterpart to the old IMGUI OnGUI: it
+        // runs once when the window opens (and after domain reload), builds
+        // the visual tree from the sibling .uxml/.uss, and wires every input
+        // to a SavePrefs callback. AssetDatabase.LoadAssetAtPath is fed a path
+        // derived from MonoScript.FromScriptableObject so the asset folder
+        // can be relocated under Assets/ without code edits.
+
+        void CreateGUI()
         {
-            scroll = EditorGUILayout.BeginScrollView(scroll);
+            var root = rootVisualElement;
 
-            EditorGUI.BeginChangeCheck();
+            var script = MonoScript.FromScriptableObject(this);
+            var scriptPath = AssetDatabase.GetAssetPath(script);
+            var dir = Path.GetDirectoryName(scriptPath).Replace('\\', '/');
 
-            // ── Chunk Files ──────────────────────────────────────────────
-            EditorGUILayout.LabelField("Chunk Files", EditorStyles.boldLabel);
-
-            sourceFolder = EditorGUILayout.TextField(
-                new GUIContent("Source folder",
-                    "Assets-relative folder holding the .fbx chunks exported from Blender. " +
-                    "Filenames must follow XX_YY.fbx exactly (XX = column index, YY = row index, " +
-                    "both zero-padded). Subfolders are not scanned."),
-                sourceFolder);
-
-            destFolder = EditorGUILayout.TextField(
-                new GUIContent("Dest folder",
-                    "Where to write the chunk .unity scenes. The folder is created if missing. " +
-                    "These scenes are then registered as Addressables and loaded by ChunkStream " +
-                    "using their filename (without the .unity extension) as the address."),
-                destFolder);
-
-            chunkSize = EditorGUILayout.FloatField(
-                new GUIContent("Chunk size, m",
-                    "Size of one grid cell in meters. MUST match what Blender used at export time " +
-                    "(chunk_w / chunk_h, derived from bbox / GRID_X in chunks_export.py) AND the " +
-                    "chunkSize field on ChunkStream in the runtime scene. A mismatch puts the Unity " +
-                    "grid at the wrong physical positions."),
-                chunkSize);
-
-            sceneNamePrefix = EditorGUILayout.TextField(
-                new GUIContent("Scene prefix",
-                    "Prefix for each chunk .unity filename. Final form: <Prefix><XX>_<YY>.unity, " +
-                    "e.g. 'Chunk_04_07.unity'. Must match the format produced by " +
-                    "ChunkCoord.ToAddress() in ChunkStream — otherwise the streamer cannot find " +
-                    "the scenes in Addressables."),
-                sceneNamePrefix);
-
-            addMeshCollider = EditorGUILayout.Toggle(
-                new GUIContent("Add MeshCollider",
-                    "Attach a non-convex MeshCollider to every MeshFilter in the chunk after the " +
-                    "bake step. sharedMesh references the baked mesh, so collision matches the " +
-                    "visible geometry 1:1 and pivots around the same point as the renderer. " +
-                    "Convex is not required because chunks are static environment (no Rigidbody)."),
-                addMeshCollider);
-
-            EditorGUILayout.Space();
-
-            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sourceFolder) || string.IsNullOrWhiteSpace(destFolder)))
+            var visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>($"{dir}/ChunkManager.uxml");
+            if (visualTree == null)
             {
-                if (GUILayout.Button("Import Chunks", GUILayout.Height(28)))
-                    EditorApplication.delayCall += ImportChunks;
+                root.Add(new Label($"ChunkManager.uxml not found next to ChunkManager.cs in '{dir}'."));
+                return;
             }
+            visualTree.CloneTree(root);
 
-            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(destFolder) || string.IsNullOrWhiteSpace(sceneNamePrefix)))
+            var styleSheet = AssetDatabase.LoadAssetAtPath<StyleSheet>($"{dir}/ChunkManager.uss");
+            if (styleSheet != null) root.styleSheets.Add(styleSheet);
+
+            BindFields(root);
+            BindButtons(root);
+            BindFoldoutPersistence(root);
+
+            RebuildConfigs();
+            UpdateModifiersBodyVisibility();
+            UpdateButtonStates();
+        }
+
+        void BindFields(VisualElement root)
+        {
+            // Chunk Files
+            BindText(root, "source-folder", sourceFolder,
+                "Assets-relative folder holding the .fbx chunks exported from Blender. " +
+                "Filenames must follow XX_YY.fbx exactly (XX = column index, YY = row index, " +
+                "both zero-padded). Subfolders are not scanned.",
+                v => { sourceFolder = v; UpdateButtonStates(); });
+
+            BindText(root, "dest-folder", destFolder,
+                "Where to write the chunk .unity scenes. The folder is created if missing. " +
+                "These scenes are then registered as Addressables and loaded by ChunkStream " +
+                "using their filename (without the .unity extension) as the address.",
+                v => { destFolder = v; UpdateButtonStates(); });
+
+            BindFloat(root, "chunk-size", chunkSize,
+                "Size of one grid cell in meters. MUST match what Blender used at export time " +
+                "(chunk_w / chunk_h, derived from bbox / GRID_X in chunks_export.py) AND the " +
+                "chunkSize field on ChunkStream in the runtime scene. A mismatch puts the Unity " +
+                "grid at the wrong physical positions.",
+                v => { chunkSize = v; });
+
+            BindText(root, "scene-prefix", sceneNamePrefix,
+                "Prefix for each chunk .unity filename. Final form: <Prefix><XX>_<YY>.unity, " +
+                "e.g. 'Chunk_04_07.unity'. Must match the format produced by " +
+                "ChunkCoord.ToAddress() in ChunkStream — otherwise the streamer cannot find " +
+                "the scenes in Addressables.",
+                v => { sceneNamePrefix = v; UpdateButtonStates(); });
+
+            BindToggle(root, "add-mesh-collider", addMeshCollider,
+                "Attach a non-convex MeshCollider to every MeshFilter in the chunk after the " +
+                "bake step. sharedMesh references the baked mesh, so collision matches the " +
+                "visible geometry 1:1 and pivots around the same point as the renderer. " +
+                "Convex is not required because chunks are static environment (no Rigidbody).",
+                v => { addMeshCollider = v; });
+
+            // Chunk Navmesh Prefabs
+            BindText(root, "tiles-dest", tilesDestFolder,
+                "Folder name (under Assets/) that stores the per-chunk navmesh tile .bytes " +
+                "files. A* Pathfinding Pro's NavmeshPrefab.SaveToFile is hard-coded to write " +
+                "into Assets/Tiles, so changing this only affects Delete Tiles below — keep " +
+                "it pointing at 'Tiles' unless you've patched the A* source to honor a " +
+                "different path.",
+                v => { tilesDestFolder = v; UpdateButtonStates(); });
+
+            // Chunk Navmesh Modifiers
+            BindToggle(root, "add-modifier", addNavmeshModifier,
+                "When on, exposes a list of RecastNavmeshModifier configs that 'Apply Navmesh Modifiers' " +
+                "below pushes into every currently open chunk scene matching 'Scene prefix'. Each config " +
+                "targets GameObjects whose name starts with its Key prefix (search is recursive through " +
+                "every root in the scene). Configs are evaluated top-to-bottom; the first matching prefix " +
+                "wins per object so a more specific prefix should come before a more generic one.",
+                v => { addNavmeshModifier = v; UpdateModifiersBodyVisibility(); });
+
+            modifiersBody    = root.Q<VisualElement>("modifiers-body");
+            configsContainer = root.Q<VisualElement>("configs-container");
+
+            // Chunk Addressables
+            BindText(root, "group-name", addressableGroupName,
+                "Name of the Addressables group used by Create / Delete below. Created if " +
+                "missing on Create; Delete looks the group up by this exact name and removes " +
+                "it along with every entry it owns.",
+                v => { addressableGroupName = v; UpdateButtonStates(); });
+
+            BindToggle(root, "simplify-names", simplifyAddressableNames,
+                "After registering, rewrite every entry's address to the filename without " +
+                "extension (e.g. 'Chunk_04_07'). That format matches ChunkCoord.ToAddress() " +
+                "in ChunkStream, so the streamer can find the scenes without extra setup. " +
+                "Turn off to keep the default GUID-based addresses.",
+                v => { simplifyAddressableNames = v; });
+        }
+
+        void BindText(VisualElement root, string name, string initial, string tooltip, System.Action<string> setter)
+        {
+            var f = root.Q<TextField>(name);
+            f.value = initial;
+            f.tooltip = tooltip;
+            f.RegisterValueChangedCallback(evt => { setter(evt.newValue); SavePrefs(); });
+        }
+
+        void BindFloat(VisualElement root, string name, float initial, string tooltip, System.Action<float> setter)
+        {
+            var f = root.Q<FloatField>(name);
+            f.value = initial;
+            f.tooltip = tooltip;
+            f.RegisterValueChangedCallback(evt => { setter(evt.newValue); SavePrefs(); });
+        }
+
+        void BindToggle(VisualElement root, string name, bool initial, string tooltip, System.Action<bool> setter)
+        {
+            var f = root.Q<Toggle>(name);
+            f.value = initial;
+            f.tooltip = tooltip;
+            f.RegisterValueChangedCallback(evt => { setter(evt.newValue); SavePrefs(); });
+        }
+
+        void BindButtons(VisualElement root)
+        {
+            btnImport         = root.Q<Button>("btn-import");
+            btnDeleteChunks   = root.Q<Button>("btn-delete-chunks");
+            btnOpen           = root.Q<Button>("btn-open");
+            btnUnload         = root.Q<Button>("btn-unload");
+            btnRemove         = root.Q<Button>("btn-remove");
+            btnCreatePrefab   = root.Q<Button>("btn-create-prefab");
+            btnDeleteTiles    = root.Q<Button>("btn-delete-tiles");
+            btnAddConfig      = root.Q<Button>("btn-add-config");
+            btnApplyModifiers = root.Q<Button>("btn-apply-modifiers");
+            btnCreateAddr     = root.Q<Button>("btn-create-addr");
+            btnDeleteAddr     = root.Q<Button>("btn-delete-addr");
+
+            // delayCall defers the operation to the next editor tick — mirrors
+            // the IMGUI version. Important for ImportChunks which switches the
+            // active scene mid-loop and for ops that pop modal dialogs.
+            btnImport.clicked         += () => EditorApplication.delayCall += ImportChunks;
+            btnDeleteChunks.clicked   += () => EditorApplication.delayCall += () => DeleteChunks(destFolder, sceneNamePrefix);
+            btnOpen.clicked           += () => EditorApplication.delayCall += () => OpenChunksAdditive(destFolder, sceneNamePrefix);
+            btnUnload.clicked         += () => EditorApplication.delayCall += () => UnloadChunkScenes(sceneNamePrefix);
+            btnRemove.clicked         += () => EditorApplication.delayCall += () => RemoveChunkScenes(sceneNamePrefix);
+            btnCreatePrefab.clicked   += () => EditorApplication.delayCall += () => CreateNavmeshPrefabs(sceneNamePrefix, chunkSize);
+            btnDeleteTiles.clicked    += () => EditorApplication.delayCall += () => DeleteTiles(tilesDestFolder);
+            btnApplyModifiers.clicked += () => EditorApplication.delayCall += () => ApplyNavmeshModifiers(sceneNamePrefix, navmeshModifierConfigs);
+            btnCreateAddr.clicked     += () => EditorApplication.delayCall += () =>
+                CreateAddressables(destFolder, sceneNamePrefix, addressableGroupName, simplifyAddressableNames);
+            btnDeleteAddr.clicked     += () => EditorApplication.delayCall += () => DeleteAddressables(addressableGroupName);
+
+            btnAddConfig.clicked += () =>
             {
-                if (GUILayout.Button("Delete Chunks", GUILayout.Height(28)))
-                    EditorApplication.delayCall += () => DeleteChunks(destFolder, sceneNamePrefix);
+                navmeshModifierConfigs.Add(new NavmeshModifierConfig());
+                SavePrefs();
+                RebuildConfigs();
+                UpdateButtonStates();
+            };
+        }
+
+        // Each top-level Foldout in the UXML carries name="<key>-foldout"; its
+        // open/closed state round-trips through EditorPrefs so re-opening the
+        // window restores the user's layout instead of forcing every section
+        // back to expanded.
+        void BindFoldoutPersistence(VisualElement root)
+        {
+            foreach (var fold in root.Query<Foldout>().Build())
+            {
+                if (string.IsNullOrEmpty(fold.name)) continue;
+                if (!fold.name.EndsWith("-foldout")) continue;
+
+                string prefKey = PK + "fold." + fold.name;
+                fold.value = EditorPrefs.GetBool(prefKey, true);
+                fold.RegisterValueChangedCallback(evt => EditorPrefs.SetBool(prefKey, evt.newValue));
             }
+        }
 
-            EditorGUILayout.Space();
+        // ── Navmesh modifier config list ───────────────────────────────────
+        // Built imperatively (not from UXML) because the row count is dynamic
+        // and each row carries Add/Remove handlers that capture the config's
+        // list index. RebuildConfigs is called whenever the list size changes;
+        // existing rows are replaced wholesale because the index closures are
+        // cheaper to recreate than to retarget.
 
-            // ── Chunk Scenes ─────────────────────────────────────────────
-            EditorGUILayout.LabelField("Chunk Scenes", EditorStyles.boldLabel);
+        void RebuildConfigs()
+        {
+            configsContainer.Clear();
 
-            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(destFolder) || string.IsNullOrWhiteSpace(sceneNamePrefix)))
+            for (int i = 0; i < navmeshModifierConfigs.Count; i++)
             {
-                if (GUILayout.Button("Open Chunks Additive", GUILayout.Height(28)))
-                    EditorApplication.delayCall += () => OpenChunksAdditive(destFolder, sceneNamePrefix);
-            }
+                int idx = i;
+                var cfg = navmeshModifierConfigs[i];
 
-            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sceneNamePrefix)))
-            {
-                if (GUILayout.Button("Unload Chunk Scenes", GUILayout.Height(28)))
-                    EditorApplication.delayCall += () => UnloadChunkScenes(sceneNamePrefix);
+                var card = new VisualElement();
+                card.AddToClassList("config-card");
 
-                if (GUILayout.Button("Remove Chunk Scenes", GUILayout.Height(28)))
-                    EditorApplication.delayCall += () => RemoveChunkScenes(sceneNamePrefix);
-            }
+                var row = new VisualElement();
+                row.AddToClassList("config-card-row");
 
-            EditorGUILayout.Space();
-
-            // ── Chunk Navmesh Prefabs ────────────────────────────────────
-            EditorGUILayout.LabelField("Chunk Navmesh Prefabs", EditorStyles.boldLabel);
-
-            tilesDestFolder = EditorGUILayout.TextField(
-                new GUIContent("Tiles dest",
-                    "Folder name (under Assets/) that stores the per-chunk navmesh tile .bytes " +
-                    "files. A* Pathfinding Pro's NavmeshPrefab.SaveToFile is hard-coded to write " +
-                    "into Assets/Tiles, so changing this only affects Delete Tiles below — keep " +
-                    "it pointing at 'Tiles' unless you've patched the A* source to honor a " +
-                    "different path."),
-                tilesDestFolder);
-
-            EditorGUILayout.Space();
-
-            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(sceneNamePrefix)))
-            {
-                if (GUILayout.Button("Create Navmesh Prefab", GUILayout.Height(28)))
-                    EditorApplication.delayCall += () => CreateNavmeshPrefabs(sceneNamePrefix, chunkSize);
-            }
-
-            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(tilesDestFolder)))
-            {
-                if (GUILayout.Button("Delete Tiles", GUILayout.Height(28)))
-                    EditorApplication.delayCall += () => DeleteTiles(tilesDestFolder);
-            }
-
-            EditorGUILayout.Space();
-
-            // ── Chunk Navmesh Modifiers ──────────────────────────────────
-            EditorGUILayout.LabelField("Chunk Navmesh Modifiers", EditorStyles.boldLabel);
-
-            addNavmeshModifier = EditorGUILayout.Toggle(
-                new GUIContent("Add Navmesh Modifier",
-                    "When on, exposes a list of RecastNavmeshModifier configs that 'Apply Navmesh Modifiers' " +
-                    "below pushes into every currently open chunk scene matching 'Scene prefix'. Each config " +
-                    "targets GameObjects whose name starts with its Key prefix (search is recursive through " +
-                    "every root in the scene). Configs are evaluated top-to-bottom; the first matching prefix " +
-                    "wins per object so a more specific prefix should come before a more generic one."),
-                addNavmeshModifier);
-
-            if (addNavmeshModifier)
-            {
-                EditorGUILayout.Space();
-
-                int removeIndex = -1;
-                for (int i = 0; i < navmeshModifierConfigs.Count; i++)
+                var fold = new Foldout
                 {
-                    var cfg = navmeshModifierConfigs[i];
+                    text  = string.IsNullOrEmpty(cfg.keyPrefix) ? $"Config {i + 1}" : cfg.keyPrefix,
+                    value = cfg.foldout,
+                };
+                fold.RegisterValueChangedCallback(evt => cfg.foldout = evt.newValue);
 
-                    EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-                    EditorGUILayout.BeginHorizontal();
-                    cfg.foldout = EditorGUILayout.Foldout(cfg.foldout,
-                        string.IsNullOrEmpty(cfg.keyPrefix) ? $"Config {i + 1}" : cfg.keyPrefix, true);
-                    if (GUILayout.Button("Remove", GUILayout.Width(70))) removeIndex = i;
-                    EditorGUILayout.EndHorizontal();
-
-                    if (cfg.foldout)
-                    {
-                        cfg.keyPrefix = EditorGUILayout.TextField(
-                            new GUIContent("Key prefix",
-                                "Name prefix used to match GameObjects inside open chunk scenes. " +
-                                "Any object whose name starts with this string gets a RecastNavmeshModifier."),
-                            cfg.keyPrefix);
-
-                        cfg.mode = (RecastNavmeshModifier.Mode)EditorGUILayout.EnumPopup(
-                            new GUIContent("Mode",
-                                "Surface rasterization mode. WalkableSurface = standard ground; " +
-                                "UnwalkableSurface = blocks the scan; WalkableSurfaceWithSeam / WithTag " +
-                                "use Surface ID to split or tag the resulting area."),
-                            cfg.mode);
-
-                        cfg.surfaceID = EditorGUILayout.IntField(
-                            new GUIContent("Surface ID",
-                                "Voxel area for the mesh. Only meaningful with WalkableSurfaceWithSeam and " +
-                                "WalkableSurfaceWithTag — ignored by the other modes."),
-                            cfg.surfaceID);
-
-                        cfg.geometrySource = (RecastNavmeshModifier.GeometrySource)EditorGUILayout.EnumPopup(
-                            new GUIContent("Geometry source",
-                                "Where the recast scan reads geometry from. Auto picks MeshFilter or " +
-                                "Collider depending on what the GameObject has."),
-                            cfg.geometrySource);
-
-                        cfg.includeInScan = (RecastNavmeshModifier.ScanInclusion)EditorGUILayout.EnumPopup(
-                            new GUIContent("Include in scan",
-                                "Whether the object is included in the recast scan. Auto follows the graph's " +
-                                "default include rules; AlwaysInclude / AlwaysExclude override them."),
-                            cfg.includeInScan);
-
-                        cfg.dynamic = EditorGUILayout.Toggle(
-                            new GUIContent("Dynamic",
-                                "Enable if the object will move at runtime. Chunk geometry is static, so leave " +
-                                "off unless this specific object is animated or moved."),
-                            cfg.dynamic);
-
-                        cfg.solid = EditorGUILayout.Toggle(
-                            new GUIContent("Solid",
-                                "If on, the mesh is treated as solid and its interior becomes unwalkable. " +
-                                "Useful for one-sided shells where the inside should also block agents."),
-                            cfg.solid);
-                    }
-
-                    EditorGUILayout.EndVertical();
-                }
-
-                if (removeIndex >= 0)
+                var removeBtn = new Button(() =>
                 {
-                    navmeshModifierConfigs.RemoveAt(removeIndex);
+                    navmeshModifierConfigs.RemoveAt(idx);
                     SavePrefs();
-                }
+                    RebuildConfigs();
+                    UpdateButtonStates();
+                }) { text = "Remove" };
+                removeBtn.AddToClassList("config-remove-button");
 
-                if (GUILayout.Button("Add Config"))
+                row.Add(fold);
+                row.Add(removeBtn);
+                card.Add(row);
+
+                var keyField = new TextField("Key prefix")
                 {
-                    navmeshModifierConfigs.Add(new NavmeshModifierConfig());
+                    value   = cfg.keyPrefix,
+                    tooltip = "Name prefix used to match GameObjects inside open chunk scenes. " +
+                              "Any object whose name starts with this string gets a RecastNavmeshModifier."
+                };
+                keyField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.keyPrefix = evt.newValue;
+                    fold.text = string.IsNullOrEmpty(evt.newValue) ? $"Config {idx + 1}" : evt.newValue;
                     SavePrefs();
-                }
+                });
+                fold.Add(keyField);
 
-                EditorGUILayout.Space();
-
-                using (new EditorGUI.DisabledScope(
-                           string.IsNullOrWhiteSpace(sceneNamePrefix) || navmeshModifierConfigs.Count == 0))
+                var modeField = new EnumField("Mode", cfg.mode)
                 {
-                    if (GUILayout.Button("Apply Navmesh Modifiers", GUILayout.Height(28)))
-                        EditorApplication.delayCall += () =>
-                            ApplyNavmeshModifiers(sceneNamePrefix, navmeshModifierConfigs);
-                }
+                    tooltip = "Surface rasterization mode. WalkableSurface = standard ground; " +
+                              "UnwalkableSurface = blocks the scan; WalkableSurfaceWithSeam / WithTag " +
+                              "use Surface ID to split or tag the resulting area."
+                };
+                modeField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.mode = (RecastNavmeshModifier.Mode)evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(modeField);
 
-                EditorGUILayout.Space();
+                var surfaceField = new IntegerField("Surface ID")
+                {
+                    value   = cfg.surfaceID,
+                    tooltip = "Voxel area for the mesh. Only meaningful with WalkableSurfaceWithSeam and " +
+                              "WalkableSurfaceWithTag — ignored by the other modes."
+                };
+                surfaceField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.surfaceID = evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(surfaceField);
+
+                var geomField = new EnumField("Geometry source", cfg.geometrySource)
+                {
+                    tooltip = "Where the recast scan reads geometry from. Auto picks MeshFilter or " +
+                              "Collider depending on what the GameObject has."
+                };
+                geomField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.geometrySource = (RecastNavmeshModifier.GeometrySource)evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(geomField);
+
+                var inclField = new EnumField("Include in scan", cfg.includeInScan)
+                {
+                    tooltip = "Whether the object is included in the recast scan. Auto follows the graph's " +
+                              "default include rules; AlwaysInclude / AlwaysExclude override them."
+                };
+                inclField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.includeInScan = (RecastNavmeshModifier.ScanInclusion)evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(inclField);
+
+                var dynamicField = new Toggle("Dynamic")
+                {
+                    value   = cfg.dynamic,
+                    tooltip = "Enable if the object will move at runtime. Chunk geometry is static, so leave " +
+                              "off unless this specific object is animated or moved."
+                };
+                dynamicField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.dynamic = evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(dynamicField);
+
+                var solidField = new Toggle("Solid")
+                {
+                    value   = cfg.solid,
+                    tooltip = "If on, the mesh is treated as solid and its interior becomes unwalkable. " +
+                              "Useful for one-sided shells where the inside should also block agents."
+                };
+                solidField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.solid = evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(solidField);
+
+                configsContainer.Add(card);
             }
+        }
 
-            // ── Chunk Addressables ───────────────────────────────────────
-            EditorGUILayout.LabelField("Chunk Addressables", EditorStyles.boldLabel);
+        void UpdateModifiersBodyVisibility()
+        {
+            if (modifiersBody == null) return;
+            modifiersBody.style.display = addNavmeshModifier ? DisplayStyle.Flex : DisplayStyle.None;
+        }
 
-            addressableGroupName = EditorGUILayout.TextField(
-                new GUIContent("Group Name",
-                    "Name of the Addressables group used by Create / Delete below. Created if " +
-                    "missing on Create; Delete looks the group up by this exact name and removes " +
-                    "it along with every entry it owns."),
-                addressableGroupName);
+        // Replaces the IMGUI EditorGUI.DisabledScope guards. Called once at
+        // window open and after every input that gates a button — keeps the
+        // disabled state in sync with current field values without polling.
+        void UpdateButtonStates()
+        {
+            bool hasSrc    = !string.IsNullOrWhiteSpace(sourceFolder);
+            bool hasDst    = !string.IsNullOrWhiteSpace(destFolder);
+            bool hasPrefix = !string.IsNullOrWhiteSpace(sceneNamePrefix);
+            bool hasTiles  = !string.IsNullOrWhiteSpace(tilesDestFolder);
+            bool hasGroup  = !string.IsNullOrWhiteSpace(addressableGroupName);
 
-            simplifyAddressableNames = EditorGUILayout.Toggle(
-                new GUIContent("Simplify Names",
-                    "After registering, rewrite every entry's address to the filename without " +
-                    "extension (e.g. 'Chunk_04_07'). That format matches ChunkCoord.ToAddress() " +
-                    "in ChunkStream, so the streamer can find the scenes without extra setup. " +
-                    "Turn off to keep the default GUID-based addresses."),
-                simplifyAddressableNames);
-
-            EditorGUILayout.Space();
-
-            using (new EditorGUI.DisabledScope(
-                       string.IsNullOrWhiteSpace(destFolder) ||
-                       string.IsNullOrWhiteSpace(sceneNamePrefix) ||
-                       string.IsNullOrWhiteSpace(addressableGroupName)))
-            {
-                if (GUILayout.Button("Create Addressable", GUILayout.Height(28)))
-                    EditorApplication.delayCall += () =>
-                        CreateAddressables(destFolder, sceneNamePrefix, addressableGroupName, simplifyAddressableNames);
-            }
-
-            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(addressableGroupName)))
-            {
-                if (GUILayout.Button("Delete Addressable", GUILayout.Height(28)))
-                    EditorApplication.delayCall += () => DeleteAddressables(addressableGroupName);
-            }
-
-            if (EditorGUI.EndChangeCheck()) SavePrefs();
-
-            EditorGUILayout.EndScrollView();
+            btnImport.SetEnabled(hasSrc && hasDst);
+            btnDeleteChunks.SetEnabled(hasDst && hasPrefix);
+            btnOpen.SetEnabled(hasDst && hasPrefix);
+            btnUnload.SetEnabled(hasPrefix);
+            btnRemove.SetEnabled(hasPrefix);
+            btnCreatePrefab.SetEnabled(hasPrefix);
+            btnDeleteTiles.SetEnabled(hasTiles);
+            btnApplyModifiers.SetEnabled(hasPrefix && navmeshModifierConfigs.Count > 0);
+            btnCreateAddr.SetEnabled(hasDst && hasPrefix && hasGroup);
+            btnDeleteAddr.SetEnabled(hasGroup);
         }
 
         struct Entry { public int a, b; public string assetPath; }
