@@ -24,12 +24,9 @@
         </ui:Foldout>
 
         <ui:Foldout name="modifiers-foldout" text="Chunk Navmesh Modifiers" value="true">
-            <ui:Toggle name="add-modifier" label="Add Navmesh Modifier" />
-            <ui:VisualElement name="modifiers-body">
-                <ui:VisualElement name="configs-container" />
-                <ui:Button name="btn-add-config" text="Add Config" />
-                <ui:Button name="btn-apply-modifiers" text="Apply Navmesh Modifiers" class="action-button" />
-            </ui:VisualElement>
+            <ui:VisualElement name="configs-container" />
+            <ui:Button name="btn-add-config" text="Add Config" />
+            <ui:Button name="btn-apply-modifiers" text="Apply Navmesh Modifiers" class="action-button" />
         </ui:Foldout>
 
         <ui:Foldout name="addressables-foldout" text="Chunk Addressables" value="true">

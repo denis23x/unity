@@ -68,12 +68,10 @@ namespace ProjectName.EditorTools
         string addressableGroupName;
         bool   simplifyAddressableNames;
         string tilesDestFolder;
-        bool   addNavmeshModifier;
         List<NavmeshModifierConfig> navmeshModifierConfigs;
 
         // UI Toolkit element refs (queried once in CreateGUI)
         VisualElement configsContainer;
-        VisualElement modifiersBody;
         Button btnImport, btnDeleteChunks, btnOpen, btnUnload, btnRemove;
         Button btnCreatePrefab, btnDeleteTiles, btnAddConfig, btnApplyModifiers;
         Button btnCreateAddr, btnDeleteAddr, btnOpenAddrGroups;
@@ -94,7 +92,6 @@ namespace ProjectName.EditorTools
             // Default "Tiles" matches NavmeshPrefab.SaveToFile's hard-coded
             // Assets/Tiles output path in A* Pathfinding Pro.
             tilesDestFolder          = EditorPrefs.GetString(PK + nameof(tilesDestFolder),          "Tiles");
-            addNavmeshModifier       = EditorPrefs.GetBool  (PK + nameof(addNavmeshModifier),       false);
 
             // EditorPrefs cannot store List<T> directly; round-trip via JsonUtility
             // through a wrapper that gives the list a named field for the serializer.
@@ -120,7 +117,6 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetString(PK + nameof(addressableGroupName),     addressableGroupName);
             EditorPrefs.SetBool  (PK + nameof(simplifyAddressableNames), simplifyAddressableNames);
             EditorPrefs.SetString(PK + nameof(tilesDestFolder),          tilesDestFolder);
-            EditorPrefs.SetBool  (PK + nameof(addNavmeshModifier),       addNavmeshModifier);
             EditorPrefs.SetString(PK + nameof(navmeshModifierConfigs),
                 JsonUtility.ToJson(new NavmeshModifierConfigList { items = navmeshModifierConfigs }));
         }
@@ -157,7 +153,6 @@ namespace ProjectName.EditorTools
             BindFoldoutPersistence(root);
 
             RebuildConfigs();
-            UpdateModifiersBodyVisibility();
             UpdateButtonStates();
         }
 
@@ -206,16 +201,9 @@ namespace ProjectName.EditorTools
                 "different path.",
                 v => { tilesDestFolder = v; UpdateButtonStates(); });
 
-            // Chunk Navmesh Modifiers
-            BindToggle(root, "add-modifier", addNavmeshModifier,
-                "When on, exposes a list of RecastNavmeshModifier configs that 'Apply Navmesh Modifiers' " +
-                "below pushes into every currently open chunk scene matching 'Scene prefix'. Each config " +
-                "targets GameObjects whose name starts with its Key prefix (search is recursive through " +
-                "every root in the scene). Configs are evaluated top-to-bottom; the first matching prefix " +
-                "wins per object so a more specific prefix should come before a more generic one.",
-                v => { addNavmeshModifier = v; UpdateModifiersBodyVisibility(); });
-
-            modifiersBody    = root.Q<VisualElement>("modifiers-body");
+            // Chunk Navmesh Modifiers — the configs list is the source of truth;
+            // an empty list means Apply Navmesh Modifiers does nothing, so no
+            // extra "enable" toggle is needed.
             configsContainer = root.Q<VisualElement>("configs-container");
 
             // Chunk Addressables
@@ -448,12 +436,6 @@ namespace ProjectName.EditorTools
 
                 configsContainer.Add(card);
             }
-        }
-
-        void UpdateModifiersBodyVisibility()
-        {
-            if (modifiersBody == null) return;
-            modifiersBody.style.display = addNavmeshModifier ? DisplayStyle.Flex : DisplayStyle.None;
         }
 
         // Replaces the IMGUI EditorGUI.DisabledScope guards. Called once at
