@@ -7,14 +7,14 @@
             <uie:FloatField name="chunk-size" label="Chunk size, m" />
             <ui:TextField name="scene-prefix" label="Scene prefix" />
             <ui:Toggle name="add-mesh-collider" label="Add MeshCollider" />
-            <ui:Button name="btn-import" text="Import Chunks" class="action-button" />
-            <ui:Button name="btn-delete-chunks" text="Delete Chunks" class="action-button" />
+            <ui:Button name="btn-import" text="Import Files" class="action-button" />
+            <ui:Button name="btn-delete-chunks" text="Delete Scenes" class="action-button" />
         </ui:Foldout>
 
         <ui:Foldout name="scenes-foldout" text="Chunk Scenes" value="true">
-            <ui:Button name="btn-open" text="Open Chunks Additive" class="action-button" />
-            <ui:Button name="btn-unload" text="Unload Chunk Scenes" class="action-button" />
-            <ui:Button name="btn-remove" text="Remove Chunk Scenes" class="action-button" />
+            <ui:Button name="btn-open" text="Open Scenes Additive" class="action-button" />
+            <ui:Button name="btn-unload" text="Unload Scenes" class="action-button" />
+            <ui:Button name="btn-remove" text="Remove Scenes" class="action-button" />
         </ui:Foldout>
 
         <ui:Foldout name="prefabs-foldout" text="Chunk Navmesh Prefabs" value="true">
@@ -35,6 +35,7 @@
         <ui:Foldout name="addressables-foldout" text="Chunk Addressables" value="true">
             <ui:TextField name="group-name" label="Group Name" />
             <ui:Toggle name="simplify-names" label="Simplify Names" />
+            <ui:Button name="btn-open-addr-groups" text="Open Addressable Groups" class="action-button" />
             <ui:Button name="btn-create-addr" text="Create Addressable" class="action-button" />
             <ui:Button name="btn-delete-addr" text="Delete Addressable" class="action-button" />
         </ui:Foldout>
