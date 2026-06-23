@@ -1,59 +1,58 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
     <ui:ScrollView class="chunk-manager">
+        <ui:TabView name="main-tabs">
 
-        <ui:Foldout name="files-foldout" text="Chunk Files" value="true">
-            <ui:TextField name="source-folder" label="Source folder" />
-            <ui:TextField name="dest-folder" label="Dest folder" />
-            <uie:FloatField name="chunk-size" label="Chunk size, m" />
-            <ui:TextField name="scene-prefix" label="Scene prefix" />
-            <ui:Toggle name="add-mesh-collider" label="Add MeshCollider" />
-            <ui:Button name="btn-import" text="Import Files" class="action-button" />
-            <ui:Button name="btn-delete-chunks" text="Delete Scenes" class="action-button" />
-        </ui:Foldout>
+            <ui:Tab label="Files">
+                <ui:TextField name="source-folder" label="Source folder" />
+                <ui:TextField name="dest-folder" label="Dest folder" />
+                <uie:FloatField name="chunk-size" label="Chunk size, m" />
+                <ui:TextField name="scene-prefix" label="Scene prefix" />
+                <ui:Toggle name="add-mesh-collider" label="Add MeshCollider" />
+                <ui:Button name="btn-import" text="Import Files" class="action-button" />
+                <ui:Button name="btn-delete-chunks" text="Delete Scenes" class="action-button" />
+            </ui:Tab>
 
-        <ui:Foldout name="scenes-foldout" text="Chunk Scenes" value="true">
-            <ui:Button name="btn-open" text="Open Scenes Additive" class="action-button" />
-            <ui:Button name="btn-unload" text="Unload Scenes" class="action-button" />
-            <ui:Button name="btn-remove" text="Remove Scenes" class="action-button" />
-        </ui:Foldout>
+            <ui:Tab label="Scenes">
+                <ui:Button name="btn-open" text="Open Scenes Additive" class="action-button" />
+                <ui:Button name="btn-load" text="Load Scenes" class="action-button" />
+                <ui:Button name="btn-unload" text="Unload Scenes" class="action-button" />
+                <ui:Button name="btn-remove" text="Remove Scenes" class="action-button" />
+            </ui:Tab>
 
-        <ui:Foldout name="navmeshes-foldout" text="Chunk Navmeshes" value="true">
-            <ui:TabView name="navmeshes-tabs">
-                <ui:Tab label="Navmesh Prefabs">
+            <ui:Tab label="Navmeshes">
+                <ui:Foldout name="navmesh-prefabs-foldout" text="Navmesh Prefabs" value="true">
                     <ui:TextField name="tiles-dest" label="Tiles dest" />
                     <ui:Button name="btn-create-prefab" text="Create Navmesh Prefab" class="action-button" />
                     <ui:Button name="btn-delete-tiles" text="Delete Tiles" class="action-button" />
-                </ui:Tab>
-                <ui:Tab label="Navmesh Modifiers">
+                </ui:Foldout>
+                <ui:Foldout name="navmesh-modifiers-foldout" text="Navmesh Modifiers" value="true">
                     <ui:VisualElement name="configs-container" />
                     <ui:Button name="btn-add-config" text="Add Config" />
                     <ui:Button name="btn-apply-modifiers" text="Apply Navmesh Modifiers" class="action-button" />
-                </ui:Tab>
-            </ui:TabView>
-        </ui:Foldout>
+                </ui:Foldout>
+            </ui:Tab>
 
-        <ui:Foldout name="tags-layers-foldout" text="Chunk Tags and Layers" value="true">
-            <ui:TabView name="tags-layers-tabs">
-                <ui:Tab label="Chunk Tags">
+            <ui:Tab label="Addressables">
+                <ui:TextField name="group-name" label="Group Name" />
+                <ui:Toggle name="simplify-names" label="Simplify Names" />
+                <ui:Button name="btn-open-addr-groups" text="Open Addressable Groups" class="action-button" />
+                <ui:Button name="btn-create-addr" text="Create Addressable" class="action-button" />
+                <ui:Button name="btn-delete-addr" text="Delete Addressable" class="action-button" />
+            </ui:Tab>
+
+            <ui:Tab label="Tags &amp; Layers">
+                <ui:Foldout name="tags-foldout" text="Chunk Tags" value="true">
                     <ui:VisualElement name="tag-configs-container" />
                     <ui:Button name="btn-add-tag-config" text="Add Config" />
                     <ui:Button name="btn-apply-tags" text="Apply Tags" class="action-button" />
-                </ui:Tab>
-                <ui:Tab label="Chunk Layers">
+                </ui:Foldout>
+                <ui:Foldout name="layers-foldout" text="Chunk Layers" value="true">
                     <ui:VisualElement name="layer-configs-container" />
                     <ui:Button name="btn-add-layer-config" text="Add Config" />
                     <ui:Button name="btn-apply-layers" text="Apply Layers" class="action-button" />
-                </ui:Tab>
-            </ui:TabView>
-        </ui:Foldout>
+                </ui:Foldout>
+            </ui:Tab>
 
-        <ui:Foldout name="addressables-foldout" text="Chunk Addressables" value="true">
-            <ui:TextField name="group-name" label="Group Name" />
-            <ui:Toggle name="simplify-names" label="Simplify Names" />
-            <ui:Button name="btn-open-addr-groups" text="Open Addressable Groups" class="action-button" />
-            <ui:Button name="btn-create-addr" text="Create Addressable" class="action-button" />
-            <ui:Button name="btn-delete-addr" text="Delete Addressable" class="action-button" />
-        </ui:Foldout>
-
+        </ui:TabView>
     </ui:ScrollView>
 </ui:UXML>

@@ -156,23 +156,32 @@ namespace ProjectName.EditorTools
                 return;
             }
 
-            int fileCount = Directory.GetFiles(folderPath, "*.bytes", SearchOption.AllDirectories).Length;
+            var files = Directory.GetFiles(folderPath, "*.bytes", SearchOption.AllDirectories)
+                .Select(p => p.Replace('\\', '/'))
+                .ToList();
+
+            if (files.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Chunk Manager",
+                    $"No .bytes tile files in:\n{folderPath}", "OK");
+                return;
+            }
+
             if (!EditorUtility.DisplayDialog("Delete Tiles",
-                    $"Delete folder '{folderPath}' and its {fileCount} .bytes file(s)?\n\n" +
+                    $"Delete {files.Count} tile file(s) from\n{folderPath}?\n\n" +
                     "Chunk scenes that reference these tiles will have a missing serializedNavmesh " +
                     "until re-baked.",
                     "Delete", "Cancel"))
                 return;
 
-            if (AssetDatabase.DeleteAsset(folderPath))
-            {
-                AssetDatabase.Refresh();
-                Debug.Log($"[ChunkManager] Deleted tiles folder: {folderPath} ({fileCount} .bytes files).");
-            }
-            else
-            {
-                Debug.LogError($"[ChunkManager] Failed to delete tiles folder: {folderPath}");
-            }
+            int deleted = 0;
+            foreach (var path in files)
+                if (AssetDatabase.DeleteAsset(path)) deleted++;
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            Debug.Log($"[ChunkManager] Deleted {deleted}/{files.Count} tile files from {folderPath}.");
         }
 
         // ── Navmesh modifier pipeline ────────────────────────────────────

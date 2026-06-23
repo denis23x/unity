@@ -92,6 +92,28 @@ namespace ProjectName.EditorTools
             Debug.Log($"[ChunkManager] Opened {opened}/{files.Count} chunk scenes additively from {destFolder}.");
         }
 
+        public static void LoadChunkScenes(string sceneNamePrefix)
+        {
+            var targets = CollectScenesByPrefix(sceneNamePrefix, requireLoaded: false)
+                .Where(s => !s.isLoaded)
+                .ToList();
+            if (targets.Count == 0)
+            {
+                Debug.Log($"[ChunkManager] No unloaded chunk scenes with prefix '{sceneNamePrefix}'.");
+                return;
+            }
+
+            int loaded = 0;
+            foreach (var s in targets)
+            {
+                if (string.IsNullOrEmpty(s.path)) continue;
+                var opened = EditorSceneManager.OpenScene(s.path, OpenSceneMode.Additive);
+                if (opened.isLoaded) loaded++;
+            }
+
+            Debug.Log($"[ChunkManager] Loaded {loaded}/{targets.Count} chunk scenes (prefix '{sceneNamePrefix}').");
+        }
+
         public static void UnloadChunkScenes(string sceneNamePrefix)
         {
             var targets = CollectScenesByPrefix(sceneNamePrefix, requireLoaded: true);

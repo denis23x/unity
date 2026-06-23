@@ -81,7 +81,7 @@ namespace ProjectName.EditorTools
         // UI Toolkit element refs (queried once in CreateGUI)
         VisualElement configsContainer;
         VisualElement tagConfigsContainer, layerConfigsContainer;
-        Button btnImport, btnDeleteChunks, btnOpen, btnUnload, btnRemove;
+        Button btnImport, btnDeleteChunks, btnOpen, btnLoad, btnUnload, btnRemove;
         Button btnCreatePrefab, btnDeleteTiles, btnAddConfig, btnApplyModifiers;
         Button btnAddTagConfig, btnApplyTags, btnAddLayerConfig, btnApplyLayers;
         Button btnCreateAddr, btnDeleteAddr, btnOpenAddrGroups;
@@ -294,6 +294,7 @@ namespace ProjectName.EditorTools
             btnImport         = root.Q<Button>("btn-import");
             btnDeleteChunks   = root.Q<Button>("btn-delete-chunks");
             btnOpen           = root.Q<Button>("btn-open");
+            btnLoad           = root.Q<Button>("btn-load");
             btnUnload         = root.Q<Button>("btn-unload");
             btnRemove         = root.Q<Button>("btn-remove");
             btnCreatePrefab   = root.Q<Button>("btn-create-prefab");
@@ -314,6 +315,7 @@ namespace ProjectName.EditorTools
             btnImport.clicked         += () => EditorApplication.delayCall += ImportChunks;
             btnDeleteChunks.clicked   += () => EditorApplication.delayCall += () => DeleteChunks(destFolder, sceneNamePrefix);
             btnOpen.clicked           += () => EditorApplication.delayCall += () => OpenChunksAdditive(destFolder, sceneNamePrefix);
+            btnLoad.clicked           += () => EditorApplication.delayCall += () => LoadChunkScenes(sceneNamePrefix);
             btnUnload.clicked         += () => EditorApplication.delayCall += () => UnloadChunkScenes(sceneNamePrefix);
             btnRemove.clicked         += () => EditorApplication.delayCall += () => RemoveChunkScenes(sceneNamePrefix);
             btnCreatePrefab.clicked   += () => EditorApplication.delayCall += () => CreateNavmeshPrefabs(sceneNamePrefix, chunkSize);
@@ -654,6 +656,7 @@ namespace ProjectName.EditorTools
             btnImport.SetEnabled(hasSrc && hasDst);
             btnDeleteChunks.SetEnabled(hasDst && hasPrefix);
             btnOpen.SetEnabled(hasDst && hasPrefix);
+            btnLoad.SetEnabled(hasPrefix);
             btnUnload.SetEnabled(hasPrefix);
             btnRemove.SetEnabled(hasPrefix);
             btnCreatePrefab.SetEnabled(hasPrefix);

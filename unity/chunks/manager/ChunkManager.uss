@@ -2,7 +2,11 @@
     padding: 8px;
 }
 
-.chunk-manager > Foldout {
+.chunk-manager Tab {
+    padding: 8px 0;
+}
+
+.chunk-manager Tab > Foldout {
     margin-bottom: 8px;
 }
 
