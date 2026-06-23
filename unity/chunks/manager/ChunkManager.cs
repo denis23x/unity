@@ -19,6 +19,11 @@
 //     matches one of the user-defined key-prefix presets. Decoupled from
 //     Import for the same reason as the navmesh prefab step: settings can be
 //     iterated on without re-importing FBX.
+//   * Apply Tags / Apply Layers — same key-prefix matching as Apply Navmesh
+//     Modifiers, but assigns a project-defined Tag or Layer to each matched
+//     GameObject. Tag/Layer values are picked from the project's existing
+//     entries via TagField / LayerField, so this step never creates new
+//     tags or layers.
 //
 // Mapping between Blender export and Unity:
 //   Blender +X → Unity +X         (column index, first in filename, cx)
@@ -40,6 +45,7 @@
 // Class is `partial`; pipeline implementations live next to this file:
 //   * ChunkManager.Scenes.cs       — open/unload/remove/delete chunk scenes
 //   * ChunkManager.Navmesh.cs      — NavmeshPrefab + RecastNavmeshModifier
+//   * ChunkManager.TagsLayers.cs   — Tag / Layer bulk-assign by key prefix
 //   * ChunkManager.Import.cs       — FBX scan + per-chunk scene write + mesh bake
 //   * ChunkManager.Addressables.cs — Addressables group create/delete
 //
@@ -69,11 +75,15 @@ namespace ProjectName.EditorTools
         bool   simplifyAddressableNames;
         string tilesDestFolder;
         List<NavmeshModifierConfig> navmeshModifierConfigs;
+        List<TagConfig> tagConfigs;
+        List<LayerConfig> layerConfigs;
 
         // UI Toolkit element refs (queried once in CreateGUI)
         VisualElement configsContainer;
+        VisualElement tagConfigsContainer, layerConfigsContainer;
         Button btnImport, btnDeleteChunks, btnOpen, btnUnload, btnRemove;
         Button btnCreatePrefab, btnDeleteTiles, btnAddConfig, btnApplyModifiers;
+        Button btnAddTagConfig, btnApplyTags, btnAddLayerConfig, btnApplyLayers;
         Button btnCreateAddr, btnDeleteAddr, btnOpenAddrGroups;
 
         [MenuItem("Tools/Chunks/Chunk Manager")]
@@ -105,6 +115,28 @@ namespace ProjectName.EditorTools
             {
                 navmeshModifierConfigs = new List<NavmeshModifierConfig>();
             }
+
+            var tagConfigsJson = EditorPrefs.GetString(PK + nameof(tagConfigs), "");
+            if (!string.IsNullOrEmpty(tagConfigsJson))
+            {
+                var wrapper = JsonUtility.FromJson<TagConfigList>(tagConfigsJson);
+                tagConfigs = wrapper?.items ?? new List<TagConfig>();
+            }
+            else
+            {
+                tagConfigs = new List<TagConfig>();
+            }
+
+            var layerConfigsJson = EditorPrefs.GetString(PK + nameof(layerConfigs), "");
+            if (!string.IsNullOrEmpty(layerConfigsJson))
+            {
+                var wrapper = JsonUtility.FromJson<LayerConfigList>(layerConfigsJson);
+                layerConfigs = wrapper?.items ?? new List<LayerConfig>();
+            }
+            else
+            {
+                layerConfigs = new List<LayerConfig>();
+            }
         }
 
         void SavePrefs()
@@ -119,6 +151,10 @@ namespace ProjectName.EditorTools
             EditorPrefs.SetString(PK + nameof(tilesDestFolder),          tilesDestFolder);
             EditorPrefs.SetString(PK + nameof(navmeshModifierConfigs),
                 JsonUtility.ToJson(new NavmeshModifierConfigList { items = navmeshModifierConfigs }));
+            EditorPrefs.SetString(PK + nameof(tagConfigs),
+                JsonUtility.ToJson(new TagConfigList { items = tagConfigs }));
+            EditorPrefs.SetString(PK + nameof(layerConfigs),
+                JsonUtility.ToJson(new LayerConfigList { items = layerConfigs }));
         }
 
         // ── UI Toolkit setup ────────────────────────────────────────────────
@@ -153,6 +189,8 @@ namespace ProjectName.EditorTools
             BindFoldoutPersistence(root);
 
             RebuildConfigs();
+            RebuildTagConfigs();
+            RebuildLayerConfigs();
             UpdateButtonStates();
         }
 
@@ -206,6 +244,12 @@ namespace ProjectName.EditorTools
             // extra "enable" toggle is needed.
             configsContainer = root.Q<VisualElement>("configs-container");
 
+            // Chunk Tags and Layers — same pattern as Navmesh Modifiers; the
+            // configs lists are the source of truth, empty lists short-circuit
+            // the Apply button.
+            tagConfigsContainer   = root.Q<VisualElement>("tag-configs-container");
+            layerConfigsContainer = root.Q<VisualElement>("layer-configs-container");
+
             // Chunk Addressables
             BindText(root, "group-name", addressableGroupName,
                 "Name of the Addressables group used by Create / Delete below. Created if " +
@@ -256,6 +300,10 @@ namespace ProjectName.EditorTools
             btnDeleteTiles    = root.Q<Button>("btn-delete-tiles");
             btnAddConfig      = root.Q<Button>("btn-add-config");
             btnApplyModifiers = root.Q<Button>("btn-apply-modifiers");
+            btnAddTagConfig   = root.Q<Button>("btn-add-tag-config");
+            btnApplyTags      = root.Q<Button>("btn-apply-tags");
+            btnAddLayerConfig = root.Q<Button>("btn-add-layer-config");
+            btnApplyLayers    = root.Q<Button>("btn-apply-layers");
             btnCreateAddr     = root.Q<Button>("btn-create-addr");
             btnDeleteAddr     = root.Q<Button>("btn-delete-addr");
             btnOpenAddrGroups = root.Q<Button>("btn-open-addr-groups");
@@ -271,6 +319,8 @@ namespace ProjectName.EditorTools
             btnCreatePrefab.clicked   += () => EditorApplication.delayCall += () => CreateNavmeshPrefabs(sceneNamePrefix, chunkSize);
             btnDeleteTiles.clicked    += () => EditorApplication.delayCall += () => DeleteTiles(tilesDestFolder);
             btnApplyModifiers.clicked += () => EditorApplication.delayCall += () => ApplyNavmeshModifiers(sceneNamePrefix, navmeshModifierConfigs);
+            btnApplyTags.clicked      += () => EditorApplication.delayCall += () => ApplyTags(sceneNamePrefix, tagConfigs);
+            btnApplyLayers.clicked    += () => EditorApplication.delayCall += () => ApplyLayers(sceneNamePrefix, layerConfigs);
             btnCreateAddr.clicked     += () => EditorApplication.delayCall += () =>
                 CreateAddressables(destFolder, sceneNamePrefix, addressableGroupName, simplifyAddressableNames);
             btnDeleteAddr.clicked     += () => EditorApplication.delayCall += () => DeleteAddressables(addressableGroupName);
@@ -281,6 +331,22 @@ namespace ProjectName.EditorTools
                 navmeshModifierConfigs.Add(new NavmeshModifierConfig());
                 SavePrefs();
                 RebuildConfigs();
+                UpdateButtonStates();
+            };
+
+            btnAddTagConfig.clicked += () =>
+            {
+                tagConfigs.Add(new TagConfig());
+                SavePrefs();
+                RebuildTagConfigs();
+                UpdateButtonStates();
+            };
+
+            btnAddLayerConfig.clicked += () =>
+            {
+                layerConfigs.Add(new LayerConfig());
+                SavePrefs();
+                RebuildLayerConfigs();
                 UpdateButtonStates();
             };
         }
@@ -438,6 +504,142 @@ namespace ProjectName.EditorTools
             }
         }
 
+        // Tag / Layer config rows follow the same pattern as RebuildConfigs:
+        // a card with a foldout header (showing the key prefix), a Remove
+        // button, a key-prefix TextField, and the value picker (TagField or
+        // LayerField — both populate from the project's defined tags/layers,
+        // so the user can never type a non-existent value).
+
+        void RebuildTagConfigs()
+        {
+            tagConfigsContainer.Clear();
+
+            for (int i = 0; i < tagConfigs.Count; i++)
+            {
+                int idx = i;
+                var cfg = tagConfigs[i];
+
+                var card = new VisualElement();
+                card.AddToClassList("config-card");
+
+                var row = new VisualElement();
+                row.AddToClassList("config-card-row");
+
+                var fold = new Foldout
+                {
+                    text  = string.IsNullOrEmpty(cfg.keyPrefix) ? $"Config {i + 1}" : cfg.keyPrefix,
+                    value = cfg.foldout,
+                };
+                fold.RegisterValueChangedCallback(evt => cfg.foldout = evt.newValue);
+
+                var removeBtn = new Button(() =>
+                {
+                    tagConfigs.RemoveAt(idx);
+                    SavePrefs();
+                    RebuildTagConfigs();
+                    UpdateButtonStates();
+                }) { text = "Remove" };
+                removeBtn.AddToClassList("config-remove-button");
+
+                row.Add(fold);
+                row.Add(removeBtn);
+                card.Add(row);
+
+                var keyField = new TextField("Key prefix")
+                {
+                    value   = cfg.keyPrefix,
+                    tooltip = "Name prefix used to match GameObjects inside open chunk scenes. " +
+                              "Any object whose name starts with this string gets its tag set."
+                };
+                keyField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.keyPrefix = evt.newValue;
+                    fold.text = string.IsNullOrEmpty(evt.newValue) ? $"Config {idx + 1}" : evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(keyField);
+
+                var tagField = new TagField("Tag", cfg.tag)
+                {
+                    tooltip = "Tag to assign. Lists only tags already defined in the project " +
+                              "(Project Settings → Tags and Layers) — this step never creates new tags."
+                };
+                tagField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.tag = evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(tagField);
+
+                tagConfigsContainer.Add(card);
+            }
+        }
+
+        void RebuildLayerConfigs()
+        {
+            layerConfigsContainer.Clear();
+
+            for (int i = 0; i < layerConfigs.Count; i++)
+            {
+                int idx = i;
+                var cfg = layerConfigs[i];
+
+                var card = new VisualElement();
+                card.AddToClassList("config-card");
+
+                var row = new VisualElement();
+                row.AddToClassList("config-card-row");
+
+                var fold = new Foldout
+                {
+                    text  = string.IsNullOrEmpty(cfg.keyPrefix) ? $"Config {i + 1}" : cfg.keyPrefix,
+                    value = cfg.foldout,
+                };
+                fold.RegisterValueChangedCallback(evt => cfg.foldout = evt.newValue);
+
+                var removeBtn = new Button(() =>
+                {
+                    layerConfigs.RemoveAt(idx);
+                    SavePrefs();
+                    RebuildLayerConfigs();
+                    UpdateButtonStates();
+                }) { text = "Remove" };
+                removeBtn.AddToClassList("config-remove-button");
+
+                row.Add(fold);
+                row.Add(removeBtn);
+                card.Add(row);
+
+                var keyField = new TextField("Key prefix")
+                {
+                    value   = cfg.keyPrefix,
+                    tooltip = "Name prefix used to match GameObjects inside open chunk scenes. " +
+                              "Any object whose name starts with this string gets its layer set."
+                };
+                keyField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.keyPrefix = evt.newValue;
+                    fold.text = string.IsNullOrEmpty(evt.newValue) ? $"Config {idx + 1}" : evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(keyField);
+
+                var layerField = new LayerField("Layer", cfg.layer)
+                {
+                    tooltip = "Layer to assign. Lists only layers already defined in the project " +
+                              "(Project Settings → Tags and Layers) — this step never creates new layers."
+                };
+                layerField.RegisterValueChangedCallback(evt =>
+                {
+                    cfg.layer = evt.newValue;
+                    SavePrefs();
+                });
+                fold.Add(layerField);
+
+                layerConfigsContainer.Add(card);
+            }
+        }
+
         // Replaces the IMGUI EditorGUI.DisabledScope guards. Called once at
         // window open and after every input that gates a button — keeps the
         // disabled state in sync with current field values without polling.
@@ -457,6 +659,8 @@ namespace ProjectName.EditorTools
             btnCreatePrefab.SetEnabled(hasPrefix);
             btnDeleteTiles.SetEnabled(hasTiles);
             btnApplyModifiers.SetEnabled(hasPrefix && navmeshModifierConfigs.Count > 0);
+            btnApplyTags.SetEnabled(hasPrefix && tagConfigs.Count > 0);
+            btnApplyLayers.SetEnabled(hasPrefix && layerConfigs.Count > 0);
             btnCreateAddr.SetEnabled(hasDst && hasPrefix && hasGroup);
             btnDeleteAddr.SetEnabled(hasGroup);
         }

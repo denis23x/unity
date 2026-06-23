@@ -17,16 +17,34 @@
             <ui:Button name="btn-remove" text="Remove Scenes" class="action-button" />
         </ui:Foldout>
 
-        <ui:Foldout name="prefabs-foldout" text="Chunk Navmesh Prefabs" value="true">
-            <ui:TextField name="tiles-dest" label="Tiles dest" />
-            <ui:Button name="btn-create-prefab" text="Create Navmesh Prefab" class="action-button" />
-            <ui:Button name="btn-delete-tiles" text="Delete Tiles" class="action-button" />
+        <ui:Foldout name="navmeshes-foldout" text="Chunk Navmeshes" value="true">
+            <ui:TabView name="navmeshes-tabs">
+                <ui:Tab label="Navmesh Prefabs">
+                    <ui:TextField name="tiles-dest" label="Tiles dest" />
+                    <ui:Button name="btn-create-prefab" text="Create Navmesh Prefab" class="action-button" />
+                    <ui:Button name="btn-delete-tiles" text="Delete Tiles" class="action-button" />
+                </ui:Tab>
+                <ui:Tab label="Navmesh Modifiers">
+                    <ui:VisualElement name="configs-container" />
+                    <ui:Button name="btn-add-config" text="Add Config" />
+                    <ui:Button name="btn-apply-modifiers" text="Apply Navmesh Modifiers" class="action-button" />
+                </ui:Tab>
+            </ui:TabView>
         </ui:Foldout>
 
-        <ui:Foldout name="modifiers-foldout" text="Chunk Navmesh Modifiers" value="true">
-            <ui:VisualElement name="configs-container" />
-            <ui:Button name="btn-add-config" text="Add Config" />
-            <ui:Button name="btn-apply-modifiers" text="Apply Navmesh Modifiers" class="action-button" />
+        <ui:Foldout name="tags-layers-foldout" text="Chunk Tags and Layers" value="true">
+            <ui:TabView name="tags-layers-tabs">
+                <ui:Tab label="Chunk Tags">
+                    <ui:VisualElement name="tag-configs-container" />
+                    <ui:Button name="btn-add-tag-config" text="Add Config" />
+                    <ui:Button name="btn-apply-tags" text="Apply Tags" class="action-button" />
+                </ui:Tab>
+                <ui:Tab label="Chunk Layers">
+                    <ui:VisualElement name="layer-configs-container" />
+                    <ui:Button name="btn-add-layer-config" text="Add Config" />
+                    <ui:Button name="btn-apply-layers" text="Apply Layers" class="action-button" />
+                </ui:Tab>
+            </ui:TabView>
         </ui:Foldout>
 
         <ui:Foldout name="addressables-foldout" text="Chunk Addressables" value="true">
