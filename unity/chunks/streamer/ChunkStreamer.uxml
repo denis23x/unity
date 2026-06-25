@@ -21,9 +21,6 @@
             </ui:Tab>
 
             <ui:Tab label="Gizmo">
-                <uie:PropertyField binding-path="gizmos.enabled" />
-                <uie:PropertyField binding-path="gizmos.yLevel" />
-
                 <uie:PropertyField binding-path="gizmos.showLoadRing" />
                 <uie:PropertyField binding-path="gizmos.loadRingColor" />
 
@@ -32,9 +29,6 @@
 
                 <uie:PropertyField binding-path="gizmos.showPredictiveRing" />
                 <uie:PropertyField binding-path="gizmos.predictiveRingColor" />
-
-                <uie:PropertyField binding-path="gizmos.showVelocityArrow" />
-                <uie:PropertyField binding-path="gizmos.velocityArrowColor" />
 
                 <uie:PropertyField binding-path="gizmos.showPlayerMarker" />
 

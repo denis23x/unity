@@ -30,13 +30,6 @@ namespace ProjectName.World
         [System.Serializable]
         public class GizmoSettings
         {
-            [Header("General")]
-            [Tooltip("Master switch. If off — the streamer draws no gizmos at all.")]
-            public bool enabled = true;
-
-            [Tooltip("Y level at which flat gizmos are drawn (typically ground level).")]
-            public float yLevel = 0.05f;
-
             [Header("Load ring (loadRadius)")]
             public bool showLoadRing = true;
             public Color loadRingColor = new Color(0f, 1f, 0f, 0.20f);
@@ -47,11 +40,7 @@ namespace ProjectName.World
 
             [Header("Predictive ring")]
             public bool showPredictiveRing = true;
-            public Color predictiveRingColor = new Color(0.3f, 0.7f, 1f, 0.8f);
-
-            [Header("Velocity arrow")]
-            public bool showVelocityArrow = true;
-            public Color velocityArrowColor = new Color(0.3f, 0.7f, 1f, 0.9f);
+            public Color predictiveRingColor = new Color(0.3f, 0.7f, 1f, 0.20f);
 
             [Header("Player marker")]
             public bool showPlayerMarker = true;
@@ -70,8 +59,6 @@ namespace ProjectName.World
 
         void OnDrawGizmos()
         {
-            if (!gizmos.enabled) return;
-
             if (!_initialized)
             {
                 // Edit mode: show the chunk the player would start in,
@@ -93,13 +80,13 @@ namespace ProjectName.World
             var predicted = _lastPredicted;
             bool predictiveActive = !predicted.Equals(center);
             if (predictiveActive && gizmos.showPredictiveRing)
+            {
                 DrawRing(predicted, loadRadius, gizmos.predictiveRingColor, 0.25f);
+                DrawVelocityArrow(target.position, ChunkWorldCenter(predicted), gizmos.predictiveRingColor);
+            }
 
             if (gizmos.showLoadRing)
                 DrawRing(center, loadRadius, gizmos.loadRingColor, 0.30f);
-
-            if (predictiveActive && gizmos.showVelocityArrow)
-                DrawVelocityArrow(target.position, ChunkWorldCenter(predicted));
 
             if (gizmos.showChunkLabels)
             {
@@ -116,7 +103,7 @@ namespace ProjectName.World
         void DrawRing(ChunkCoord center, int radius, Color color, float yOffset)
         {
             Vector3 c = ChunkWorldCenter(center);
-            c.y = gizmos.yLevel + yOffset;
+            c.y = yOffset;
             // The actual load area is a Chebyshev square (2r+1)×(2r+1) chunks. We inscribe
             // a disc in that square — it sits entirely inside the load area, so anything
             // visually under the disc is definitely streamed. The corners outside the disc
@@ -129,7 +116,6 @@ namespace ProjectName.World
         void DrawChunkState(ChunkEntry entry)
         {
             Vector3 center = ChunkWorldCenter(entry.Coord);
-            center.y = gizmos.yLevel;
 
             _chunkLabelStyle ??= new GUIStyle
             {
@@ -151,7 +137,7 @@ namespace ProjectName.World
 
         void DrawPlayerMarker(Vector3 pos, ChunkCoord coord)
         {
-            pos.y = gizmos.yLevel + 0.5f;
+            pos.y = 0.5f;
 
             _playerLabelStyle ??= new GUIStyle
             {
@@ -166,21 +152,31 @@ namespace ProjectName.World
             UnityEditor.Handles.Label(pos + Vector3.up * 1.5f, coord.ToString(), _playerLabelStyle);
         }
 
-        void DrawVelocityArrow(Vector3 from, Vector3 to)
+        void DrawVelocityArrow(Vector3 from, Vector3 to, Color color)
         {
-            from.y = gizmos.yLevel + 0.4f;
+            from.y = 0.4f;
             to.y = from.y;
-            Gizmos.color = gizmos.velocityArrowColor;
-            Gizmos.DrawLine(from, to);
+
             Vector3 dir = (to - from).normalized;
-            if (dir.sqrMagnitude > 0.01f)
-            {
-                Vector3 right = Vector3.Cross(Vector3.up, dir);
-                Vector3 head1 = to - dir * (chunkSize * 0.15f) + right * (chunkSize * 0.08f);
-                Vector3 head2 = to - dir * (chunkSize * 0.15f) - right * (chunkSize * 0.08f);
-                Gizmos.DrawLine(to, head1);
-                Gizmos.DrawLine(to, head2);
-            }
+            if (dir.sqrMagnitude < 0.01f) return;
+
+            // The ring's color is intentionally semi-transparent (it's an area hint).
+            // The arrow is a directional indicator that must read clearly against the
+            // scene geometry — force full alpha while keeping the ring's hue.
+            color.a = 1f;
+            UnityEditor.Handles.color = color;
+
+            Vector3 right = Vector3.Cross(Vector3.up, dir);
+            float headLen = chunkSize * 0.15f;
+            float headHalfWidth = chunkSize * 0.08f;
+            Vector3 headBase = to - dir * headLen;
+            Vector3 head1 = headBase + right * headHalfWidth;
+            Vector3 head2 = headBase - right * headHalfWidth;
+
+            // Anti-aliased thick shaft up to the arrowhead base, plus a filled triangle
+            // arrowhead — much more readable than thin Gizmos.DrawLine.
+            UnityEditor.Handles.DrawAAPolyLine(6f, from, headBase);
+            UnityEditor.Handles.DrawAAConvexPolygon(to, head1, head2);
         }
 
         static string StateShortName(ChunkState s) => s switch
@@ -188,7 +184,7 @@ namespace ProjectName.World
             ChunkState.Loaded            => "LOADED",
             ChunkState.Loading           => "LOADING…",
             ChunkState.Queued            => "QUEUED",
-            ChunkState.PendingUnload     => "PENDING UNLOAD",
+            ChunkState.PendingUnload     => "PENDING\nUNLOAD",
             ChunkState.Unloading         => "UNLOADING…",
             ChunkState.Available         => "AVAILABLE",
             ChunkState.CheckingExistence => "CHECKING…",
