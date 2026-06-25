@@ -30,12 +30,12 @@
 //   Blender +Y → Unity +Z         (row index, second in filename, cy)
 //   Blender +Z → Unity +Y         (up)
 //
-// World position math (zero-centered grid, matches ChunkStream.ChunkWorldCenter):
+// World position math (zero-centered grid, matches ChunkStreamer.ChunkWorldCenter):
 //   u = (col + 0.5 - countA/2) * chunkSize
 //   v = (row + 0.5 - countB/2) * chunkSize
 // Grid dims (countA × countB) are derived from the FBX file set on disk;
 // chunkSize is set in this window's UI. Its default literal must be kept in
-// sync with ChunkStream.DefaultChunkSize by hand — the two scripts intentionally
+// sync with ChunkStreamer.DefaultChunkSize by hand — the two scripts intentionally
 // don't reference each other so the importer compiles standalone.
 //
 // UI: UI Toolkit. Layout lives in ChunkManager.uxml, styles in ChunkManager.uss
@@ -93,7 +93,7 @@ namespace ProjectName.EditorTools
         {
             sourceFolder    = EditorPrefs.GetString(PK + nameof(sourceFolder),    "Assets/Chunks");
             destFolder      = EditorPrefs.GetString(PK + nameof(destFolder),      "Assets/Scenes/Chunks");
-            // Default must match ChunkStream.DefaultChunkSize — kept in sync by hand.
+            // Default must match ChunkStreamer.DefaultChunkSize — kept in sync by hand.
             chunkSize       = EditorPrefs.GetFloat (PK + nameof(chunkSize),       96f);
             addMeshCollider          = EditorPrefs.GetBool  (PK + nameof(addMeshCollider),          true);
             sceneNamePrefix          = EditorPrefs.GetString(PK + nameof(sceneNamePrefix),          "Chunk_");
@@ -205,21 +205,21 @@ namespace ProjectName.EditorTools
 
             BindText(root, "dest-folder", destFolder,
                 "Where to write the chunk .unity scenes. The folder is created if missing. " +
-                "These scenes are then registered as Addressables and loaded by ChunkStream " +
+                "These scenes are then registered as Addressables and loaded by ChunkStreamer " +
                 "using their filename (without the .unity extension) as the address.",
                 v => { destFolder = v; UpdateButtonStates(); });
 
             BindFloat(root, "chunk-size", chunkSize,
                 "Size of one grid cell in meters. MUST match what Blender used at export time " +
                 "(chunk_w / chunk_h, derived from bbox / GRID_X in chunks_export.py) AND the " +
-                "chunkSize field on ChunkStream in the runtime scene. A mismatch puts the Unity " +
+                "chunkSize field on ChunkStreamer in the runtime scene. A mismatch puts the Unity " +
                 "grid at the wrong physical positions.",
                 v => { chunkSize = v; });
 
             BindText(root, "scene-prefix", sceneNamePrefix,
                 "Prefix for each chunk .unity filename. Final form: <Prefix><XX>_<YY>.unity, " +
                 "e.g. 'Chunk_04_07.unity'. Must match the format produced by " +
-                "ChunkCoord.ToAddress() in ChunkStream — otherwise the streamer cannot find " +
+                "ChunkCoord.ToAddress() in ChunkStreamer — otherwise the streamer cannot find " +
                 "the scenes in Addressables.",
                 v => { sceneNamePrefix = v; UpdateButtonStates(); });
 
@@ -260,7 +260,7 @@ namespace ProjectName.EditorTools
             BindToggle(root, "simplify-names", simplifyAddressableNames,
                 "After registering, rewrite every entry's address to the filename without " +
                 "extension (e.g. 'Chunk_04_07'). That format matches ChunkCoord.ToAddress() " +
-                "in ChunkStream, so the streamer can find the scenes without extra setup. " +
+                "in ChunkStreamer, so the streamer can find the scenes without extra setup. " +
                 "Turn off to keep the default GUID-based addresses.",
                 v => { simplifyAddressableNames = v; });
         }

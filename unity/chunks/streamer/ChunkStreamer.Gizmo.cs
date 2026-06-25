@@ -2,17 +2,17 @@
 using UnityEngine;
 using UnityEditor;
 
-namespace Postal.World
+namespace ProjectName.World
 {
     /// <summary>
-    /// Gizmo-визуализация ChunkStream'а: фоновая сетка, кольца загрузки/выгрузки,
+    /// Gizmo-визуализация ChunkStreamer'а: фоновая сетка, кольца загрузки/выгрузки,
     /// маркер игрока, состояния чанков с подписями, HUD-сводка. Полностью
     /// заворачивается в #if UNITY_EDITOR — в standalone-сборку не входит совсем.
     ///
-    /// Это partial-файл основного класса ChunkStream. Имеет доступ ко всем приватным
+    /// Это partial-файл основного класса ChunkStreamer. Имеет доступ ко всем приватным
     /// полям: _chunks, _lastCenter, _origin, loadRadius и т.д.
     /// </summary>
-    public partial class ChunkStream
+    public partial class ChunkStreamer
     {
         // ============================================================
         // Конфигурация gizmo (все цвета/тоглы)
@@ -88,10 +88,18 @@ namespace Postal.World
             public bool showChunkLabels = true;
             public Color chunkLabelColor = Color.white;
 
-            [Header("HUD-сводка над игроком (показывается при выделении ChunkStream)")]
+            [Header("HUD-сводка над игроком (показывается при выделении ChunkStreamer)")]
             public bool showHUD = true;
             public Color hudColor = Color.white;
         }
+
+        // Кеш для GUIStyle — раньше аллоцировались в каждом DrawChunkState/DrawPlayerCrosshair/
+        // OnDrawGizmosSelected, давая GC-мусор на N чанков * кадр в Scene View. Цвета берутся
+        // из gizmos и могут меняться в инспекторе, поэтому textColor переписываем каждый раз
+        // (это уже не аллокация). Lazy-init — чтобы не зависеть от порядка инициализации.
+        static GUIStyle _chunkLabelStyle;
+        static GUIStyle _playerLabelStyle;
+        static GUIStyle _hudStyle;
 
         void OnDrawGizmos()
         {
@@ -160,17 +168,13 @@ namespace Postal.World
             int dne = CountByState(ChunkState.DoesNotExist);
             int available = CountByState(ChunkState.Available);
 
-            var style = new GUIStyle
-            {
-                fontSize = 11,
-                normal = { textColor = gizmos.hudColor },
-                alignment = TextAnchor.MiddleCenter
-            };
+            _hudStyle ??= new GUIStyle { fontSize = 11, alignment = TextAnchor.MiddleCenter };
+            _hudStyle.normal.textColor = gizmos.hudColor;
             string hud =
                 $"chunk {_lastCenter}  |  loaded {loaded}  |  loading {loading}/{loadBudget}  |  " +
                 $"queued {queued}  |  pending {pending}  |  unloading {unloading}  |  " +
                 $"available {available}  |  noScene {dne}  |  total {_chunks.Count}";
-            UnityEditor.Handles.Label(target.position + Vector3.up * 4f, hud, style);
+            UnityEditor.Handles.Label(target.position + Vector3.up * 4f, hud, _hudStyle);
         }
 
         // ---- gizmo helpers ----
@@ -258,13 +262,9 @@ namespace Postal.World
                     if (left > 0) label += $" {left:F1}s";
                 }
 
-                var style = new GUIStyle
-                {
-                    fontSize = 10,
-                    normal = { textColor = gizmos.chunkLabelColor },
-                    alignment = TextAnchor.MiddleCenter
-                };
-                UnityEditor.Handles.Label(center + Vector3.up * 0.3f, label, style);
+                _chunkLabelStyle ??= new GUIStyle { fontSize = 10, alignment = TextAnchor.MiddleCenter };
+                _chunkLabelStyle.normal.textColor = gizmos.chunkLabelColor;
+                UnityEditor.Handles.Label(center + Vector3.up * 0.3f, label, _chunkLabelStyle);
             }
         }
 
@@ -290,15 +290,15 @@ namespace Postal.World
 
             if (gizmos.showPlayerLabel)
             {
-                var style = new GUIStyle
+                _playerLabelStyle ??= new GUIStyle
                 {
                     fontSize = 12,
                     fontStyle = FontStyle.Bold,
-                    normal = { textColor = gizmos.playerLabelColor },
                     alignment = TextAnchor.MiddleCenter
                 };
+                _playerLabelStyle.normal.textColor = gizmos.playerLabelColor;
                 string label = _initialized ? $"PLAYER {_lastCenter}" : "PLAYER";
-                UnityEditor.Handles.Label(pos + Vector3.up * 1.5f, label, style);
+                UnityEditor.Handles.Label(pos + Vector3.up * 1.5f, label, _playerLabelStyle);
             }
         }
 

@@ -8,12 +8,12 @@ using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.ResourceManagement.ResourceLocations;
 using UnityEngine.ResourceManagement.ResourceProviders;
 
-namespace Postal.World
+namespace ProjectName.World
 {
     /// <summary>
     /// Целочисленная координата чанка на сетке. Совпадает с XX/YY-индексом в имени
     /// сцены Chunk_XX_YY.unity, который задаёт ChunkImport при экспорте FBX-чанков.
-    /// Перевод координаты в мировую позицию делается через ChunkStream.ChunkWorldCenter —
+    /// Перевод координаты в мировую позицию делается через ChunkStreamer.ChunkWorldCenter —
     /// формула зависит от gridSize и gridOrigin, поэтому здесь её намеренно нет.
     /// Y здесь — имя в координатах чанка, не путать с world Y (высотой).
     /// </summary>
@@ -58,7 +58,7 @@ namespace Postal.World
     ///    стрелка скорости, цветная заливка по состояниям, таймер на pending-unload,
     ///    координатные подписи.
     /// </summary>
-    public partial class ChunkStream : MonoBehaviour
+    public partial class ChunkStreamer : MonoBehaviour
     {
         // ============================================================
         // Канонические дефолты сетки. Менять ЗДЕСЬ — и стример, и ChunkImport
@@ -185,7 +185,7 @@ namespace Postal.World
         {
             if (target == null)
             {
-                Debug.LogError("[ChunkStream] Не назначен target — выключаюсь.");
+                Debug.LogError("[ChunkStreamer] Не назначен target — выключаюсь.");
                 enabled = false;
                 return;
             }
@@ -218,7 +218,7 @@ namespace Postal.World
             // Unity-овский == null корректно ловит "missing reference" Object'ы.
             if (target == null)
             {
-                Debug.LogWarning("[ChunkStream] target == null, выключаюсь. " +
+                Debug.LogWarning("[ChunkStreamer] target == null, выключаюсь. " +
                                  "Если игрок пересоздаётся — назначь новый target и заново enable.");
                 enabled = false;
                 return;
@@ -619,7 +619,7 @@ namespace Postal.World
 
                 if (op.Status != AsyncOperationStatus.Succeeded)
                 {
-                    Debug.LogWarning($"[ChunkStream] ✗ Не удалось загрузить {entry.Coord} ('{addr}').");
+                    Debug.LogWarning($"[ChunkStreamer] ✗ Не удалось загрузить {entry.Coord} ('{addr}').");
                     Addressables.Release(op);
                     entry.State = ChunkState.Available; // existence известно, попробуем потом
                     entry.SceneHandle = default;
@@ -748,7 +748,7 @@ namespace Postal.World
             if (mb > memoryBudgetMB)
             {
                 Debug.LogWarning(
-                    $"[ChunkStream] Бюджет памяти превышен: {mb:F0}/{memoryBudgetMB:F0} МБ " +
+                    $"[ChunkStreamer] Бюджет памяти превышен: {mb:F0}/{memoryBudgetMB:F0} МБ " +
                     "(Profiler.GetTotalAllocatedMemoryLong, native+managed). " +
                     $"Активных чанков: {CountByState(ChunkState.Loaded)}. " +
                     "TODO: реализовать агрессивную выгрузку дальних.");
@@ -762,7 +762,7 @@ namespace Postal.World
             return n;
         }
 
-        void Log(string msg) => Debug.Log($"[ChunkStream] {msg}");
+        void Log(string msg) => Debug.Log($"[ChunkStreamer] {msg}");
 
         // ============================================================
         // Gizmo — информативно, плавно следит за игроком

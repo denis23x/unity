@@ -1,0 +1,7 @@
+.chunk-streamer-editor {
+    padding: 4px 2px;
+}
+
+.chunk-streamer-editor > Foldout {
+    margin-bottom: 6px;
+}

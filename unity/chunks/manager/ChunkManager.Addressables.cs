@@ -6,7 +6,7 @@
 //   Create adds every scene matching <Scene prefix>*.unity in Dest folder into
 //   that group; with "Simplify Names" enabled each entry's address becomes the
 //   filename without extension (i.e. "Chunk_XX_YY"), matching
-//   ChunkCoord.ToAddress() in ChunkStream. Delete removes the group along with
+//   ChunkCoord.ToAddress() in ChunkStreamer. Delete removes the group along with
 //   every entry it owns. Import does NOT touch Addressables — registration is
 //   a separate, explicit step.
 
