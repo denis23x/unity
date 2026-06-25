@@ -5,77 +5,77 @@ using UnityEditor;
 namespace ProjectName.World
 {
     /// <summary>
-    /// Gizmo-визуализация ChunkStreamer'а: фоновая сетка, кольца загрузки/выгрузки,
-    /// маркер игрока, состояния чанков с подписями, HUD-сводка. Полностью
-    /// заворачивается в #if UNITY_EDITOR — в standalone-сборку не входит совсем.
+    /// Gizmo visualization for ChunkStreamer: background grid, load/unload rings,
+    /// player marker, per-chunk states with labels, HUD summary. Fully wrapped
+    /// in #if UNITY_EDITOR — never compiled into standalone builds.
     ///
-    /// Это partial-файл основного класса ChunkStreamer. Имеет доступ ко всем приватным
-    /// полям: _chunks, _lastCenter, _origin, loadRadius и т.д.
+    /// Partial file of the main ChunkStreamer class. Has access to all private
+    /// fields: _chunks, _lastCenter, _origin, loadRadius, etc.
     /// </summary>
     public partial class ChunkStreamer
     {
         // ============================================================
-        // Конфигурация gizmo (все цвета/тоглы)
+        // Gizmo configuration (all colors / toggles)
         // ============================================================
 
         [Header("Gizmo")]
-        [Tooltip("Все параметры визуализации. Раскрой, чтобы выключить отдельные элементы " +
-                 "или подкрасить цвета.")]
+        [Tooltip("All visualization parameters. Expand to disable individual elements " +
+                 "or recolor them.")]
         [SerializeField] GizmoSettings gizmos = new GizmoSettings();
 
         /// <summary>
-        /// Все настройки рисования gizmo. Каждый элемент имеет тогл и цвет — можно выключить
-        /// то, что мешает, или подкрасить под свою сцену.
+        /// All gizmo drawing settings. Each element has a toggle and a color — disable
+        /// what gets in the way, or recolor to fit the scene.
         /// </summary>
         [System.Serializable]
         public class GizmoSettings
         {
-            [Header("Общее")]
-            [Tooltip("Мастер-выключатель. Если выключен — стример не рисует ни одного gizmo.")]
+            [Header("General")]
+            [Tooltip("Master switch. If off — the streamer draws no gizmos at all.")]
             public bool enabled = true;
 
-            [Tooltip("Y-уровень, на котором рисуются плоские gizmo (обычно уровень земли).")]
+            [Tooltip("Y level at which flat gizmos are drawn (typically ground level).")]
             public float yLevel = 0.05f;
 
-            [Header("Фоновая координатная сетка")]
+            [Header("Background coordinate grid")]
             public bool showGrid = true;
             public Color gridColor = new Color(1f, 1f, 1f, 0.15f);
-            [Tooltip("Радиус в чанках, в котором рисуется решётка вокруг игрока.")]
+            [Tooltip("Radius in chunks around the player where the grid is drawn.")]
             [Min(1)] public int gridRadius = 5;
 
-            [Header("Кольцо текущего чанка (где стоит игрок)")]
+            [Header("Current chunk ring (where the player stands)")]
             public bool showCurrentChunkOutline = true;
             public Color currentChunkColor = new Color(1f, 1f, 1f, 0.9f);
 
-            [Header("Кольцо загрузки (loadRadius)")]
+            [Header("Load ring (loadRadius)")]
             public bool showLoadRing = true;
-            [Tooltip("Cyan по умолчанию — контраст с зелёным навмешем.")]
+            [Tooltip("Cyan by default — contrasts well with the green navmesh.")]
             public Color loadRingColor = new Color(0f, 1f, 1f, 1f);
 
-            [Header("Кольцо выгрузки (unloadRadius)")]
+            [Header("Unload ring (unloadRadius)")]
             public bool showUnloadRing = true;
             public Color unloadRingColor = new Color(0.5f, 0.5f, 0.5f, 0.5f);
 
-            [Header("Предсказательное кольцо")]
+            [Header("Predictive ring")]
             public bool showPredictiveRing = true;
             public Color predictiveRingColor = new Color(0.3f, 0.7f, 1f, 0.8f);
 
-            [Header("Стрелка скорости")]
+            [Header("Velocity arrow")]
             public bool showVelocityArrow = true;
             public Color velocityArrowColor = new Color(0.3f, 0.7f, 1f, 0.9f);
 
-            [Header("Маркер игрока")]
+            [Header("Player marker")]
             public bool showPlayerMarker = true;
             public Color playerMarkerColor = Color.yellow;
             public Color playerCenterDotColor = Color.red;
             public bool showPlayerLabel = true;
             public Color playerLabelColor = Color.yellow;
 
-            [Header("Заливки чанков по состояниям")]
+            [Header("Chunk fills by state")]
             public bool showChunkFills = true;
-            [Tooltip("LOADED и активно нужен (в текущем кольце loadRadius).")]
+            [Tooltip("LOADED and actively wanted (inside the current loadRadius ring).")]
             public Color loadedInRingColor = new Color(0.2f, 1f, 0.2f, 0.35f);
-            [Tooltip("LOADED по инерции (в гистерезисном буфере, ждёт таймера или возврата игрока).")]
+            [Tooltip("LOADED by inertia (inside the hysteresis buffer, awaiting timer or the player's return).")]
             public Color loadedInBufferColor = new Color(0.6f, 0.7f, 0.3f, 0.20f);
             public Color loadingColor = new Color(0.3f, 0.7f, 1f, 0.40f);
             public Color queuedColor = new Color(1f, 0.9f, 0.2f, 0.35f);
@@ -84,19 +84,20 @@ namespace ProjectName.World
             public Color checkingExistenceColor = new Color(0.6f, 0.6f, 0.6f, 0.25f);
             public Color doesNotExistColor = new Color(0.4f, 0.4f, 0.4f, 0.15f);
 
-            [Header("Подписи на чанках")]
+            [Header("Chunk labels")]
             public bool showChunkLabels = true;
             public Color chunkLabelColor = Color.white;
 
-            [Header("HUD-сводка над игроком (показывается при выделении ChunkStreamer)")]
+            [Header("HUD summary above the player (shown when ChunkStreamer is selected)")]
             public bool showHUD = true;
             public Color hudColor = Color.white;
         }
 
-        // Кеш для GUIStyle — раньше аллоцировались в каждом DrawChunkState/DrawPlayerCrosshair/
-        // OnDrawGizmosSelected, давая GC-мусор на N чанков * кадр в Scene View. Цвета берутся
-        // из gizmos и могут меняться в инспекторе, поэтому textColor переписываем каждый раз
-        // (это уже не аллокация). Lazy-init — чтобы не зависеть от порядка инициализации.
+        // GUIStyle cache — previously these were allocated inside every DrawChunkState/
+        // DrawPlayerCrosshair/OnDrawGizmosSelected call, producing GC garbage on the order
+        // of N chunks * frame in the Scene View. Colors come from `gizmos` and can change
+        // in the inspector, so textColor is rewritten each time (no longer an allocation).
+        // Lazy init — to avoid depending on initialization order.
         static GUIStyle _chunkLabelStyle;
         static GUIStyle _playerLabelStyle;
         static GUIStyle _hudStyle;
@@ -107,9 +108,9 @@ namespace ProjectName.World
 
             if (!_initialized)
             {
-                // Edit-mode: показываем сетку и чанк, в котором стартует игрок,
-                // чтобы можно было проверить выравнивание до запуска игры.
-                // CurrentChunk сам использует ActiveOrigin и потому корректен и в edit-mode.
+                // Edit mode: show the grid and the chunk the player would start in,
+                // so alignment can be checked before entering Play. CurrentChunk uses
+                // ActiveOrigin and is therefore correct in edit mode too.
                 if (target != null)
                 {
                     var editCenter = CurrentChunk();
@@ -183,20 +184,21 @@ namespace ProjectName.World
         {
             Gizmos.color = gizmos.gridColor;
             float r = gizmos.gridRadius * chunkSize;
-            // Y игрока, чтобы сетка лежала ровно на земле, не уходила в небо/под пол.
+            // Use the player's Y so the grid sits right on the ground and doesn't float
+            // into the sky / sink below the floor.
             float y = (target != null ? target.position.y : 0f) + gizmos.yLevel;
-            // База — мировой центр чанка игрока. ChunkWorldCenter учитывает gridSize,
-            // поэтому сетка остаётся выровнена с импортёром при любом размере grid.
+            // Base — world center of the player's chunk. ChunkWorldCenter accounts for
+            // gridSize, so the grid stays aligned with the importer at any grid size.
             Vector3 base_ = ChunkWorldCenter(center);
             base_.y = y;
 
             for (int i = -gizmos.gridRadius; i <= gizmos.gridRadius + 1; i++)
             {
                 float off = (i - 0.5f) * chunkSize;
-                // Вертикальные линии (вдоль Z).
+                // Vertical lines (along Z).
                 Gizmos.DrawLine(base_ + new Vector3(off, 0, -r - chunkSize / 2),
                                 base_ + new Vector3(off, 0,  r + chunkSize / 2));
-                // Горизонтальные (вдоль X).
+                // Horizontal lines (along X).
                 Gizmos.DrawLine(base_ + new Vector3(-r - chunkSize / 2, 0, off),
                                 base_ + new Vector3( r + chunkSize / 2, 0, off));
             }
@@ -226,7 +228,7 @@ namespace ProjectName.World
             Vector3 center = ChunkWorldCenter(entry.Coord);
             center.y = gizmos.yLevel;
 
-            // 1) Заливка (если включена).
+            // 1) Fill (if enabled).
             if (gizmos.showChunkFills)
             {
                 Color fill = ColorForState(entry.State, inRing, gizmos);
@@ -245,7 +247,7 @@ namespace ProjectName.World
                 }
             }
 
-            // 2) Подпись (если включена).
+            // 2) Label (if enabled).
             if (gizmos.showChunkLabels)
             {
                 int dist = entry.Coord.ChebyshevDistance(_lastCenter);
@@ -274,17 +276,17 @@ namespace ProjectName.World
             float r = chunkSize * 0.18f;
 
             Gizmos.color = gizmos.playerMarkerColor;
-            // Ромб
+            // Diamond
             Gizmos.DrawLine(pos + Vector3.forward * r, pos + Vector3.right * r);
             Gizmos.DrawLine(pos + Vector3.right   * r, pos + Vector3.back  * r);
             Gizmos.DrawLine(pos + Vector3.back    * r, pos + Vector3.left  * r);
             Gizmos.DrawLine(pos + Vector3.left    * r, pos + Vector3.forward * r);
-            // Крест через центр
+            // Cross through the center
             float cr = r * 1.3f;
             Gizmos.DrawLine(pos + Vector3.left * cr,    pos + Vector3.right * cr);
             Gizmos.DrawLine(pos + Vector3.forward * cr, pos + Vector3.back * cr);
 
-            // Точка-маркер в центре
+            // Center dot
             Gizmos.color = gizmos.playerCenterDotColor;
             Gizmos.DrawSphere(pos, r * 0.12f);
 
@@ -327,7 +329,7 @@ namespace ProjectName.World
                 ChunkState.Loading           => g.loadingColor,
                 ChunkState.Queued            => g.queuedColor,
                 ChunkState.PendingUnload     => g.pendingUnloadColor,
-                ChunkState.Unloading         => g.pendingUnloadColor, // визуально близок к pending
+                ChunkState.Unloading         => g.pendingUnloadColor, // visually close to pending
                 ChunkState.Available         => g.availableColor,
                 ChunkState.CheckingExistence => g.checkingExistenceColor,
                 ChunkState.DoesNotExist      => g.doesNotExistColor,

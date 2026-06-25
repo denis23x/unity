@@ -1,41 +1,78 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
     <ui:VisualElement class="chunk-streamer-editor">
+        <ui:TabView name="main-tabs">
 
-        <ui:Foldout name="target-foldout" text="Цель слежения">
-            <uie:PropertyField binding-path="target" />
-        </ui:Foldout>
+            <ui:Tab label="Streamer">
+                <uie:PropertyField binding-path="target" />
+                <uie:PropertyField binding-path="gridOrigin" />
 
-        <ui:Foldout name="anchor-foldout" text="Якорь сетки">
-            <uie:PropertyField binding-path="gridOrigin" />
-        </ui:Foldout>
+                <ui:Foldout name="grid-foldout" text="Grid">
+                    <uie:PropertyField binding-path="chunkSize" />
+                    <uie:PropertyField binding-path="gridSize" />
+                    <uie:PropertyField binding-path="loadRadius" />
+                    <uie:PropertyField binding-path="unloadRadius" />
+                </ui:Foldout>
 
-        <ui:Foldout name="grid-foldout" text="Сетка">
-            <uie:PropertyField binding-path="chunkSize" />
-            <uie:PropertyField binding-path="gridSize" />
-            <uie:PropertyField binding-path="loadRadius" />
-            <uie:PropertyField binding-path="unloadRadius" />
-        </ui:Foldout>
+                <ui:Foldout name="performance-foldout" text="Performance">
+                    <uie:PropertyField binding-path="loadBudget" />
+                    <uie:PropertyField binding-path="unloadDelaySeconds" />
+                    <uie:PropertyField binding-path="predictiveLoadAhead" />
+                    <uie:PropertyField binding-path="velocitySmoothing" />
+                    <uie:PropertyField binding-path="predictiveMinSpeed" />
+                </ui:Foldout>
 
-        <ui:Foldout name="performance-foldout" text="Производительность">
-            <uie:PropertyField binding-path="loadBudget" />
-            <uie:PropertyField binding-path="unloadDelaySeconds" />
-            <uie:PropertyField binding-path="predictiveLoadAhead" />
-            <uie:PropertyField binding-path="velocitySmoothing" />
-            <uie:PropertyField binding-path="predictiveMinSpeed" />
-        </ui:Foldout>
+                <ui:Foldout name="memory-foldout" text="Memory budget">
+                    <uie:PropertyField binding-path="memoryBudgetMB" />
+                    <uie:PropertyField binding-path="memoryCheckInterval" />
+                </ui:Foldout>
+            </ui:Tab>
 
-        <ui:Foldout name="memory-foldout" text="Бюджет памяти">
-            <uie:PropertyField binding-path="memoryBudgetMB" />
-            <uie:PropertyField binding-path="memoryCheckInterval" />
-        </ui:Foldout>
+            <ui:Tab label="Gizmo">
+                <uie:PropertyField binding-path="gizmos.enabled" />
+                <uie:PropertyField binding-path="gizmos.yLevel" />
 
-        <ui:Foldout name="diagnostics-foldout" text="Диагностика">
-            <uie:PropertyField binding-path="verboseLogging" />
-        </ui:Foldout>
+                <uie:PropertyField binding-path="gizmos.showGrid" />
+                <uie:PropertyField binding-path="gizmos.gridColor" />
+                <uie:PropertyField binding-path="gizmos.gridRadius" />
 
-        <ui:Foldout name="gizmo-foldout" text="Gizmo">
-            <uie:PropertyField binding-path="gizmos" />
-        </ui:Foldout>
+                <uie:PropertyField binding-path="gizmos.showCurrentChunkOutline" />
+                <uie:PropertyField binding-path="gizmos.currentChunkColor" />
 
+                <uie:PropertyField binding-path="gizmos.showLoadRing" />
+                <uie:PropertyField binding-path="gizmos.loadRingColor" />
+
+                <uie:PropertyField binding-path="gizmos.showUnloadRing" />
+                <uie:PropertyField binding-path="gizmos.unloadRingColor" />
+
+                <uie:PropertyField binding-path="gizmos.showPredictiveRing" />
+                <uie:PropertyField binding-path="gizmos.predictiveRingColor" />
+
+                <uie:PropertyField binding-path="gizmos.showVelocityArrow" />
+                <uie:PropertyField binding-path="gizmos.velocityArrowColor" />
+
+                <uie:PropertyField binding-path="gizmos.showPlayerMarker" />
+                <uie:PropertyField binding-path="gizmos.playerMarkerColor" />
+                <uie:PropertyField binding-path="gizmos.playerCenterDotColor" />
+                <uie:PropertyField binding-path="gizmos.showPlayerLabel" />
+                <uie:PropertyField binding-path="gizmos.playerLabelColor" />
+
+                <uie:PropertyField binding-path="gizmos.showChunkFills" />
+                <uie:PropertyField binding-path="gizmos.loadedInRingColor" />
+                <uie:PropertyField binding-path="gizmos.loadedInBufferColor" />
+                <uie:PropertyField binding-path="gizmos.loadingColor" />
+                <uie:PropertyField binding-path="gizmos.queuedColor" />
+                <uie:PropertyField binding-path="gizmos.pendingUnloadColor" />
+                <uie:PropertyField binding-path="gizmos.availableColor" />
+                <uie:PropertyField binding-path="gizmos.checkingExistenceColor" />
+                <uie:PropertyField binding-path="gizmos.doesNotExistColor" />
+
+                <uie:PropertyField binding-path="gizmos.showChunkLabels" />
+                <uie:PropertyField binding-path="gizmos.chunkLabelColor" />
+
+                <uie:PropertyField binding-path="gizmos.showHUD" />
+                <uie:PropertyField binding-path="gizmos.hudColor" />
+            </ui:Tab>
+
+        </ui:TabView>
     </ui:VisualElement>
 </ui:UXML>

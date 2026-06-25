@@ -11,11 +11,11 @@ using UnityEngine.ResourceManagement.ResourceProviders;
 namespace ProjectName.World
 {
     /// <summary>
-    /// Целочисленная координата чанка на сетке. Совпадает с XX/YY-индексом в имени
-    /// сцены Chunk_XX_YY.unity, который задаёт ChunkImport при экспорте FBX-чанков.
-    /// Перевод координаты в мировую позицию делается через ChunkStreamer.ChunkWorldCenter —
-    /// формула зависит от gridSize и gridOrigin, поэтому здесь её намеренно нет.
-    /// Y здесь — имя в координатах чанка, не путать с world Y (высотой).
+    /// Integer chunk coordinate on the grid. Matches the XX/YY index in the
+    /// Chunk_XX_YY.unity scene name produced by ChunkImport when exporting FBX chunks.
+    /// Converting a coordinate to a world position is done via ChunkStreamer.ChunkWorldCenter —
+    /// the formula depends on gridSize and gridOrigin, so it is intentionally not here.
+    /// Y here is the name in chunk coordinates, not to be confused with world Y (height).
     /// </summary>
     public readonly struct ChunkCoord : IEquatable<ChunkCoord>
     {
@@ -24,11 +24,11 @@ namespace ProjectName.World
 
         public ChunkCoord(int x, int y) { X = x; Y = y; }
 
-        /// <summary>Чебышёвское ("шахматное") расстояние — соответствует квадратным кольцам.</summary>
+        /// <summary>Chebyshev ("chessboard") distance — matches the square rings.</summary>
         public int ChebyshevDistance(ChunkCoord o)
             => Mathf.Max(Mathf.Abs(X - o.X), Mathf.Abs(Y - o.Y));
 
-        /// <summary>Квадрат евклидова расстояния. Нужен для приоритета загрузки (ближе = раньше).</summary>
+        /// <summary>Squared Euclidean distance. Used for load priority (closer = sooner).</summary>
         public int SquaredEuclideanDistance(ChunkCoord o)
         {
             int dx = X - o.X, dy = Y - o.Y;
@@ -37,35 +37,35 @@ namespace ProjectName.World
 
         public bool Equals(ChunkCoord o) => X == o.X && Y == o.Y;
         public override bool Equals(object o) => o is ChunkCoord c && Equals(c);
-        // HashCode.Combine — стандартный mix, без риска overflow на больших координатах
-        // (старая версия с X*73856093 переполнялась для X > ~29 тыс, хотя для int wrap-around
-        // это не ломало корректность, новая версия аккуратнее).
+        // HashCode.Combine — standard mix, no overflow risk on large coordinates
+        // (the old version with X*73856093 overflowed for X > ~29k; for int wrap-around
+        // this didn't break correctness, but the new version is tidier).
         public override int GetHashCode() => HashCode.Combine(X, Y);
         public override string ToString() => $"({X},{Y})";
-        // Совпадает с именем .unity-сцены от ChunkImport (sceneNamePrefix="Chunk_", :00 padding).
+        // Matches the .unity scene name produced by ChunkImport (sceneNamePrefix="Chunk_", :00 padding).
         public string ToAddress() => $"Chunk_{X:00}_{Y:00}";
     }
 
     /// <summary>
-    /// Стример чанков v2.1 — исправления:
-    ///  • Origin — центр чанка (0,0), не угол. Игрок стартует в середине стартового чанка.
-    ///  • Existence-кеш переживает выгрузку: вводится состояние Available для "знаем что
-    ///    есть, но не в памяти". При повторном входе нет лишнего запроса в Addressables.
-    ///  • Queued-чанки, которые стали ненужными, отменяются (возвращаются в Available)
-    ///    до того, как уйдут в фактическую загрузку. Защита от паразитных IO-операций
-    ///    при дёрганом предиктиве.
-    ///  • Более информативные gizmo: координатная сетка, crosshair игрока (плавно следит),
-    ///    стрелка скорости, цветная заливка по состояниям, таймер на pending-unload,
-    ///    координатные подписи.
+    /// Chunk streamer v2.1 — fixes:
+    ///  • Origin is the center of chunk (0,0), not the corner. The player starts in the middle of the start chunk.
+    ///  • Existence cache survives unload: an Available state is introduced for "known to
+    ///    exist but not in memory". On re-entry there is no extra Addressables request.
+    ///  • Queued chunks that became unneeded are cancelled (rolled back to Available)
+    ///    before they actually start loading. Protects against spurious IO operations
+    ///    under jittery predictive movement.
+    ///  • More informative gizmos: coordinate grid, player crosshair (smoothly follows),
+    ///    velocity arrow, color fills per state, pending-unload countdown,
+    ///    coordinate labels.
     /// </summary>
     public partial class ChunkStreamer : MonoBehaviour
     {
         // ============================================================
-        // Канонические дефолты сетки. Менять ЗДЕСЬ — и стример, и ChunkImport
-        // подхватят одно значение для свежей установки. Уже сериализованные
-        // значения (на компоненте в сцене и в EditorPrefs импортёра) не
-        // обновятся автоматически — править их Inspector'ом / в окне импортёра,
-        // либо разово сбросить EditorPrefs ключи и Reset на компоненте.
+        // Canonical grid defaults. Change them HERE — both the streamer and ChunkImport
+        // will pick up the same value for a fresh setup. Values that are already
+        // serialized (on the component in a scene, and in the importer's EditorPrefs)
+        // will NOT update automatically — edit them in the Inspector / importer window,
+        // or one-off reset the EditorPrefs keys and Reset the component.
         // ============================================================
 
         public const float DefaultChunkSize     = 96f;
@@ -75,40 +75,37 @@ namespace ProjectName.World
         // Configuration
         // ============================================================
 
-        [Header("Цель слежения")]
+        [Header("Tracking target")]
         [SerializeField] Transform target;
 
-        [Header("Якорь сетки")]
-        [Tooltip("Мировая позиция, в которой центрируется ВСЯ сетка (как делает ChunkImport). " +
-                 "По умолчанию (0,0,0) — сетка центрирована на мировом origin. " +
-                 "НЕ меняй во время Play — сместит всю сетку и приведёт к каскаду перезагрузок.")]
+        [Header("Grid anchor")]
+        [Tooltip("World position where the WHOLE grid is centered (matches what ChunkImport does). " +
+                 "Default (0,0,0) — grid centered on the world origin. " +
+                 "Do NOT change at Play time — this shifts the entire grid and triggers a cascade of reloads.")]
         [SerializeField] Vector3 gridOrigin = Vector3.zero;
 
-        [Header("Сетка")]
+        [Header("Grid")]
         [SerializeField, Min(1f)] float chunkSize = DefaultChunkSize;
-        [Tooltip("Размер сетки в чанках (X = столбцы, Y = ряды). Должен совпадать с GRID_X / GRID_Y " +
-                 "в Blender-скрипте экспорта. Используется и для перевода мировой позиции игрока " +
-                 "в Chunk_XX_YY координату, и для отсечки запросов вне границ сетки.")]
+        [Tooltip("Grid size in chunks (X = columns, Y = rows). Must match GRID_X / GRID_Y " +
+                 "in the Blender export script. Used both to translate the player's world position " +
+                 "into a Chunk_XX_YY coordinate, and to cull requests outside the grid bounds.")]
         [SerializeField] Vector2Int gridSize = new Vector2Int(DefaultGridDimension, DefaultGridDimension);
         [SerializeField, Min(0)] int loadRadius = 1;
         [SerializeField, Min(1)] int unloadRadius = 2;
 
-        [Header("Производительность")]
+        [Header("Performance")]
         [SerializeField, Min(1)] int loadBudget = 3;
         [SerializeField, Min(0f)] float unloadDelaySeconds = 10f;
         [SerializeField, Min(0)] int predictiveLoadAhead = 2;
         [SerializeField, Min(0.05f)] float velocitySmoothing = 0.5f;
 
-        [Tooltip("Минимальная скорость (м/с), при которой предиктив включается. " +
-                 "Защита от дрожания при околонулевой скорости.")]
+        [Tooltip("Minimum speed (m/s) at which predictive prefetch kicks in. " +
+                 "Guard against jitter at near-zero speed.")]
         [SerializeField, Min(0f)] float predictiveMinSpeed = 1f;
 
-        [Header("Бюджет памяти (пока только варнинг)")]
+        [Header("Memory budget (warning only for now)")]
         [SerializeField, Min(64f)] float memoryBudgetMB = 4096f;
         [SerializeField, Min(1f)] float memoryCheckInterval = 5f;
-
-        [Header("Диагностика")]
-        [SerializeField] bool verboseLogging = false;
 
         // ============================================================
         // Public events — persistence hooks
@@ -123,15 +120,15 @@ namespace ProjectName.World
 
         enum ChunkState
         {
-            Unknown,            // ещё не запрашивали existence
-            CheckingExistence,  // летит запрос Addressables.LoadResourceLocationsAsync
-            DoesNotExist,       // подтверждено отсутствие — финальное состояние
-            Available,          // известно что есть, но не в памяти (выгружено или ещё не грузился)
-            Queued,             // в очереди на загрузку, ждёт бюджета
-            Loading,            // летит LoadSceneAsync
-            Loaded,             // в памяти
-            PendingUnload,      // на таймере отложенной выгрузки
-            Unloading,          // летит UnloadSceneAsync — ещё не завершилось
+            Unknown,            // existence not yet queried
+            CheckingExistence,  // Addressables.LoadResourceLocationsAsync in flight
+            DoesNotExist,       // confirmed missing — terminal state
+            Available,          // known to exist but not in memory (unloaded or never loaded)
+            Queued,             // queued for load, waiting on budget
+            Loading,            // LoadSceneAsync in flight
+            Loaded,             // in memory
+            PendingUnload,      // on the deferred-unload timer
+            Unloading,          // UnloadSceneAsync in flight — not yet finished
         }
 
         class ChunkEntry
@@ -139,21 +136,21 @@ namespace ProjectName.World
             public ChunkCoord Coord;
             public ChunkState State;
             public AsyncOperationHandle<SceneInstance> SceneHandle;
-            public AsyncOperationHandle<SceneInstance> UnloadHandle; // ждём пока выгрузится
+            public AsyncOperationHandle<SceneInstance> UnloadHandle; // wait until unload finishes
             public float UnloadAtTime;
             public List<TaskCompletionSource<bool>> Barriers;
 
             /// <summary>
-            /// Включается через EnsureChunkLoaded. Гарантирует, что чанк будет доведён до
-            /// Loaded даже если игрок далеко (контракт "ensure" — это форсированная загрузка
-            /// для телепортов и cutscene). Сбрасывается после успешной загрузки.
+            /// Set by EnsureChunkLoaded. Guarantees the chunk will be driven to Loaded
+            /// even if the player is far away (the "ensure" contract — a forced load
+            /// for teleports and cutscenes). Cleared after a successful load.
             /// </summary>
             public bool ForceLoad;
 
             /// <summary>
-            /// Игрок захочет перезагрузить этот чанк после того, как он закончит выгрузку.
-            /// Нужен, потому что UnloadSceneAsync асинхронен — между Pending→Unloading
-            /// и фактическим завершением может прийти RequestLoad.
+            /// The player will want this chunk reloaded after it finishes unloading.
+            /// Needed because UnloadSceneAsync is async — between Pending→Unloading
+            /// and actual completion, a RequestLoad may arrive.
             /// </summary>
             public bool ReloadAfterUnload;
         }
@@ -185,23 +182,18 @@ namespace ProjectName.World
         {
             if (target == null)
             {
-                Debug.LogError("[ChunkStreamer] Не назначен target — выключаюсь.");
+                Debug.LogError("[ChunkStreamer] target is not assigned — disabling.");
                 enabled = false;
                 return;
             }
 
-            // Origin — это ЯКОРЬ глобальной сетки, не позиция игрока. Сетка фиксированно
-            // привязана к мировым координатам, игрок просто оказывается в каком-то её чанке.
+            // Origin is the ANCHOR of the global grid, not the player's position. The grid is
+            // pinned to world coordinates; the player just happens to land in one of its chunks.
             _origin = gridOrigin;
             _lastTargetPos = target.position;
             _initialized = true;
 
-            var startChunk = CurrentChunk();
-            if (verboseLogging)
-                Log($"gridOrigin = ({_origin.x:F1}, {_origin.z:F1}). " +
-                    $"Игрок стартовал в ({target.position.x:F1}, {target.position.z:F1}) — это чанк {startChunk}.");
-
-            _lastCenter = startChunk;
+            _lastCenter = CurrentChunk();
             _lastPredicted = _lastCenter;
             RecomputeRings();
         }
@@ -214,12 +206,12 @@ namespace ProjectName.World
         void Update()
         {
             if (!_initialized) return;
-            // Защита от уничтоженного target (респаун игрока через Destroy+Instantiate).
-            // Unity-овский == null корректно ловит "missing reference" Object'ы.
+            // Guard against a destroyed target (player respawn via Destroy+Instantiate).
+            // Unity's == null correctly catches "missing reference" Objects.
             if (target == null)
             {
-                Debug.LogWarning("[ChunkStreamer] target == null, выключаюсь. " +
-                                 "Если игрок пересоздаётся — назначь новый target и заново enable.");
+                Debug.LogWarning("[ChunkStreamer] target == null, disabling. " +
+                                 "If the player is being recreated — assign a new target and re-enable.");
                 enabled = false;
                 return;
             }
@@ -233,8 +225,6 @@ namespace ProjectName.World
 
             if (centerChanged || predictedChanged)
             {
-                if (centerChanged && verboseLogging)
-                    Log($"Игрок перешёл в чанк {center} (было {_lastCenter}).");
                 _lastCenter = center;
                 _lastPredicted = predicted;
                 RecomputeRings();
@@ -255,30 +245,30 @@ namespace ProjectName.World
         // ============================================================
 
         /// <summary>
-        /// Origin для текущего рендера. В Play-mode — кешированный (зафиксирован в Start),
-        /// в Edit-mode — текущее значение из инспектора (чтобы gizmo обновлялись на лету
-        /// при правке gridOrigin без запуска игры).
+        /// Origin for the current render. In Play mode — cached (snapshotted in Start);
+        /// in Edit mode — the live inspector value (so gizmos update on the fly
+        /// when editing gridOrigin without entering Play mode).
         /// </summary>
         Vector3 ActiveOrigin => _initialized ? _origin : gridOrigin;
 
         /// <summary>
-        /// Чанк, в котором сейчас игрок. Считается от gridOrigin: рассчитываем позицию
-        /// игрока относительно якоря и делим на chunkSize.
+        /// The chunk the player is currently in. Computed from gridOrigin: take the player's
+        /// position relative to the anchor and divide by chunkSize.
         /// </summary>
         public ChunkCoord CurrentChunk()
         {
             Vector3 rel = target.position - ActiveOrigin;
-            // Та же математика, что в ChunkImport.ImportOne:
+            // Same math as in ChunkImport.ImportOne:
             //   u_center = (col + 0.5 - gridSize.x/2) * chunkSize
-            // Инверсия для "в каком чанке точка u":
+            // Inverted to "which chunk a point u belongs to":
             //   col = floor(u / chunkSize + gridSize.x/2)
-            // Для 8×8/100м игрок в мировом (0,0,0) → Chunk_04_04, в (-350,0,-350) → Chunk_00_00.
+            // For 8×8/100m a player at world (0,0,0) → Chunk_04_04, at (-350,0,-350) → Chunk_00_00.
             return new ChunkCoord(
                 Mathf.FloorToInt(rel.x / chunkSize + gridSize.x * 0.5f),
                 Mathf.FloorToInt(rel.z / chunkSize + gridSize.y * 0.5f));
         }
 
-        /// <summary>Мировой центр чанка (Y=0). Зеркало CurrentChunk.</summary>
+        /// <summary>World center of a chunk (Y=0). Mirrors CurrentChunk.</summary>
         public Vector3 ChunkWorldCenter(ChunkCoord c)
         {
             return ActiveOrigin + new Vector3(
@@ -288,26 +278,27 @@ namespace ProjectName.World
         }
 
         /// <summary>
-        /// Координата лежит в пределах конечной сетки [0, gridSize)? Off-grid не запрашиваются —
-        /// иначе у краёв стример постоянно бил бы в Addressables по несуществующим адресам.
+        /// Is the coordinate within the finite grid [0, gridSize)? Off-grid coords are
+        /// not queried — otherwise edges would constantly hit Addressables with
+        /// non-existent addresses.
         /// </summary>
         bool InGrid(ChunkCoord c)
             => c.X >= 0 && c.X < gridSize.x && c.Y >= 0 && c.Y < gridSize.y;
 
-        /// <summary>AABB чанка в мировых координатах.</summary>
+        /// <summary>AABB of a chunk in world coordinates.</summary>
         public Bounds ChunkWorldBounds(ChunkCoord c, float heightY = 100f)
         {
             return new Bounds(ChunkWorldCenter(c), new Vector3(chunkSize, heightY, chunkSize));
         }
 
         /// <summary>
-        /// Stream barrier: гарантирует, что чанк загружен. Используется для телепортов.
-        /// Возвращает true если загружен или уже в памяти, false если не существует или сбой.
-        /// Главный чанк (0,0) всегда true.
+        /// Stream barrier: guarantees the chunk is loaded. Used for teleports.
+        /// Returns true if loaded or already in memory, false if it doesn't exist or load failed.
+        /// The main chunk (0,0) is always true.
         ///
-        /// Контракт: ForceLoad — этот чанк ДОЛЖЕН быть доведён до Loaded даже если игрок
-        /// далеко. Иначе телепорт мог бы зависнуть на барьере, который никогда не резолвится,
-        /// потому что обычный код решил, что чанк "уже не нужен".
+        /// Contract: ForceLoad — this chunk MUST be driven to Loaded even if the player
+        /// is far away. Otherwise a teleport could hang on a barrier that never resolves
+        /// because regular code decided the chunk is "no longer needed".
         /// </summary>
         public Task<bool> EnsureChunkLoaded(ChunkCoord coord)
         {
@@ -325,7 +316,7 @@ namespace ProjectName.World
                     entry.State = ChunkState.Loaded;
                     return Task.FromResult(true);
                 case ChunkState.Unloading:
-                    // Сцена ещё в процессе выгрузки. После её завершения сразу перезагрузим.
+                    // Scene is still in the middle of unloading. Reload as soon as it finishes.
                     entry.ReloadAfterUnload = true;
                     break;
                 case ChunkState.Unknown:
@@ -334,15 +325,15 @@ namespace ProjectName.World
                 case ChunkState.Available:
                     entry.State = ChunkState.Queued;
                     break;
-                // CheckingExistence / Queued / Loading — уже движутся; форсируем флагом ниже.
+                // CheckingExistence / Queued / Loading — already in motion; the flag below forces them.
             }
 
-            // Главное: помечаем намерение довести до Loaded даже если игрок отойдёт.
+            // The point: mark the intent to drive to Loaded even if the player walks away.
             entry.ForceLoad = true;
 
             if (entry.Barriers == null) entry.Barriers = new List<TaskCompletionSource<bool>>();
-            // RunContinuationsAsynchronously — чтобы await продолжился НЕ синхронно прямо
-            // из нашего TrySetResult (который может выполниться в чужом callback'е Addressables).
+            // RunContinuationsAsynchronously — so the await does NOT continue synchronously from
+            // our TrySetResult (which may execute inside someone else's Addressables callback).
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             entry.Barriers.Add(tcs);
             return tcs.Task;
@@ -365,17 +356,15 @@ namespace ProjectName.World
             delta.y = 0f;
             float dt = Mathf.Max(Time.deltaTime, 1e-4f);
 
-            // Защита от телепортов: если игрок прыгнул больше чем на полчанка за кадр,
-            // это не движение, а скачок (fast travel, респаун, cutscene-snap). НЕ учитываем
-            // его в скорости — иначе _smoothedVelocity накачается до тысяч м/с и предиктив
-            // запустит кольцо загрузки в сторону телепорта на несколько кадров.
+            // Teleport guard: if the player jumped more than half a chunk in a single frame,
+            // it's not movement but a snap (fast travel, respawn, cutscene snap). Do NOT feed
+            // this into velocity — otherwise _smoothedVelocity would spike into thousands of m/s
+            // and predictive would launch a load ring towards the teleport for several frames.
             float teleportThresholdSqr = chunkSize * chunkSize * 0.25f;
             if (delta.sqrMagnitude > teleportThresholdSqr)
             {
                 _lastTargetPos = currentPos;
                 _smoothedVelocity = Vector3.zero;
-                if (verboseLogging)
-                    Log($"Обнаружен телепорт ({delta.magnitude:F0}м за кадр) — сброс скорости.");
                 return;
             }
 
@@ -405,18 +394,18 @@ namespace ProjectName.World
             var center = _lastCenter;
             var predicted = _lastPredicted;
 
-            // 1) Желаемое множество = кольцо вокруг текущего + кольцо вокруг предсказанного.
+            // 1) Desired set = ring around current + ring around predicted.
             _desiredScratch.Clear();
             FillRingAround(center, loadRadius, _desiredScratch);
             if (predictiveLoadAhead > 0)
                 FillRingAround(predicted, loadRadius, _desiredScratch);
 
-            // 2) Заявка на загрузку всех желаемых, кого ещё нет в памяти.
-            //    Off-grid координаты RequestLoad отсечёт через InGrid().
+            // 2) Request a load for every desired chunk not yet in memory.
+            //    Off-grid coords are filtered out by RequestLoad via InGrid().
             foreach (var c in _desiredScratch) RequestLoad(c);
 
-            // 3) Отмена очереди и pending-unload для уже-загружаемых/уже-загруженных,
-            //    которые перестали быть желаемыми.
+            // 3) Cancel queue/pending-unload for already-loading/already-loaded chunks
+            //    that stopped being desired.
             _scratch.Clear();
             foreach (var kv in _chunks)
             {
@@ -426,18 +415,17 @@ namespace ProjectName.World
                 switch (entry.State)
                 {
                     case ChunkState.Queued:
-                        // Передумали грузить — откатываем в Available (existence кешируется).
-                        // НО: если стоит ForceLoad (от EnsureChunkLoaded) — не трогаем,
-                        // контракт барьера выше пользовательского движения.
+                        // Changed our mind — roll back to Available (existence stays cached).
+                        // BUT: if ForceLoad is set (via EnsureChunkLoaded) — leave it alone;
+                        // the barrier contract trumps user movement.
                         if (!desired && !entry.ForceLoad)
                         {
                             entry.State = ChunkState.Available;
-                            if (verboseLogging) Log($"Отменил Queued для {entry.Coord} — больше не нужен.");
                         }
                         break;
 
                     case ChunkState.Loaded:
-                        // Уже в памяти, но больше не желателен — на таймер выгрузки.
+                        // In memory but no longer desired — put it on the unload timer.
                         int distActual = entry.Coord.ChebyshevDistance(center);
                         int distPredicted = entry.Coord.ChebyshevDistance(predicted);
                         int dist = Mathf.Min(distActual, distPredicted);
@@ -445,23 +433,22 @@ namespace ProjectName.World
                         break;
 
                     case ChunkState.PendingUnload:
-                        // Был на таймере, но игрок вернулся в зону — оживляем.
+                        // Was on the timer, but the player walked back into the zone — revive it.
                         if (desired)
                         {
                             entry.State = ChunkState.Loaded;
-                            if (verboseLogging) Log($"Отменён pending unload для {entry.Coord}.");
                         }
                         break;
 
                     case ChunkState.Unloading:
-                        // Сейчас выгружается. Если снова стал нужен — попросим перезагрузить
-                        // когда выгрузка завершится.
+                        // Currently unloading. If it became wanted again — schedule a reload
+                        // for when the unload completes.
                         if (desired) entry.ReloadAfterUnload = true;
                         break;
 
-                    // CheckingExistence / Loading — пусть закончат своё дело,
-                    // в их completion-callback стоит проверка "ещё нужен?" + ForceLoad.
-                    // Unknown / DoesNotExist / Available — нечего отменять.
+                    // CheckingExistence / Loading — let them finish their work;
+                    // their completion callback re-checks "still wanted?" and ForceLoad.
+                    // Unknown / DoesNotExist / Available — nothing to cancel.
                 }
             }
 
@@ -476,11 +463,11 @@ namespace ProjectName.World
         }
 
         /// <summary>
-        /// Чанк сейчас нужен (в активном кольце загрузки от current или predicted)?
-        /// ВАЖНО: эта функция вычисляется из _lastCenter/_lastPredicted напрямую и НЕ
-        /// зависит от _desiredScratch — поэтому её безопасно вызывать из async-колбэков
-        /// Addressables, в момент, когда _desiredScratch может быть в промежуточном
-        /// состоянии (пересоздаётся в RecomputeRings).
+        /// Is the chunk currently wanted (in the active load ring of current or predicted)?
+        /// IMPORTANT: this is computed from _lastCenter/_lastPredicted directly and does NOT
+        /// depend on _desiredScratch — so it's safe to call from Addressables async callbacks
+        /// at a moment when _desiredScratch may be in an intermediate state (being rebuilt
+        /// inside RecomputeRings).
         /// </summary>
         bool IsDesired(ChunkCoord c)
         {
@@ -491,8 +478,8 @@ namespace ProjectName.World
         }
 
         /// <summary>
-        /// Чанк вышел за гистерезисный буфер (от обоих центров)? Используется в
-        /// completion-колбэках для решения "выгружать ли только что загруженный чанк".
+        /// Is the chunk past the hysteresis buffer (from both centers)? Used in completion
+        /// callbacks to decide "should we unload the chunk we just finished loading?"
         /// </summary>
         bool IsBeyondUnloadRange(ChunkCoord c)
         {
@@ -502,7 +489,7 @@ namespace ProjectName.World
         }
 
         // ============================================================
-        // Lifecycle переходов чанка
+        // Chunk lifecycle transitions
         // ============================================================
 
         ChunkEntry GetOrCreateEntry(ChunkCoord c)
@@ -527,18 +514,15 @@ namespace ProjectName.World
                     break;
                 case ChunkState.Available:
                     entry.State = ChunkState.Queued;
-                    if (verboseLogging) Log($"{entry.Coord}: Available → Queued.");
                     break;
                 case ChunkState.PendingUnload:
                     entry.State = ChunkState.Loaded;
-                    if (verboseLogging) Log($"{entry.Coord}: PendingUnload → Loaded (откат).");
                     break;
                 case ChunkState.Unloading:
-                    // Сцена ещё выгружается — попросим перезагрузить, когда закончит.
+                    // Scene is still unloading — request a reload for when it finishes.
                     entry.ReloadAfterUnload = true;
-                    if (verboseLogging) Log($"{entry.Coord}: Unloading, поставлю reload-after-unload.");
                     break;
-                // Остальные состояния — уже движутся к нужному терминалу или не движутся вообще.
+                // Other states are either already heading to the right terminal or going nowhere.
             }
         }
 
@@ -557,28 +541,23 @@ namespace ProjectName.World
                 if (!exists)
                 {
                     entry.State = ChunkState.DoesNotExist;
-                    if (verboseLogging)
-                        Log($"{entry.Coord} ('{addr}') не существует — игнорю.");
                     ResolveBarriers(entry, success: false);
                     return;
                 }
 
-                // Существует. Дальше — нужен ли он СЕЙЧАС:
-                // - ForceLoad (через EnsureChunkLoaded) ВСЕГДА доводит до Queued.
-                // - Иначе проверяем актуальный desire (IsDesired считается из _lastCenter/
-                //   _lastPredicted напрямую, не из _desiredScratch — это снимает гонку).
+                // It exists. Next — is it wanted RIGHT NOW:
+                // - ForceLoad (via EnsureChunkLoaded) ALWAYS drives it to Queued.
+                // - Otherwise check the live desire (IsDesired reads from _lastCenter/
+                //   _lastPredicted directly, not from _desiredScratch — that removes the race).
                 if (entry.ForceLoad || IsDesired(entry.Coord))
                 {
                     entry.State = ChunkState.Queued;
-                    if (verboseLogging) Log($"{entry.Coord} ('{addr}') существует — в очередь.");
                 }
                 else
                 {
                     entry.State = ChunkState.Available;
-                    if (verboseLogging)
-                        Log($"{entry.Coord} ('{addr}') существует, но уже не нужен — Available.");
-                    // Барьеры (если есть) резолвим неудачей: чанк не загружен и не будет
-                    // загружаться (никто не звал EnsureChunkLoaded → ForceLoad=false).
+                    // Resolve any barriers with failure: the chunk is not loaded and won't
+                    // be loaded (nobody called EnsureChunkLoaded → ForceLoad=false).
                     ResolveBarriers(entry, success: false);
                 }
             };
@@ -609,9 +588,6 @@ namespace ProjectName.World
             entry.State = ChunkState.Loading;
             _activeLoads++;
 
-            if (verboseLogging)
-                Log($"→ загружаю {entry.Coord} ('{addr}'). Активных: {_activeLoads}/{loadBudget}.");
-
             entry.SceneHandle = Addressables.LoadSceneAsync(addr, LoadSceneMode.Additive);
             entry.SceneHandle.Completed += op =>
             {
@@ -619,31 +595,28 @@ namespace ProjectName.World
 
                 if (op.Status != AsyncOperationStatus.Succeeded)
                 {
-                    Debug.LogWarning($"[ChunkStreamer] ✗ Не удалось загрузить {entry.Coord} ('{addr}').");
+                    Debug.LogWarning($"[ChunkStreamer] ✗ Failed to load {entry.Coord} ('{addr}').");
                     Addressables.Release(op);
-                    entry.State = ChunkState.Available; // existence известно, попробуем потом
+                    entry.State = ChunkState.Available; // existence is known, try again later
                     entry.SceneHandle = default;
                     entry.ForceLoad = false;
                     ResolveBarriers(entry, success: false);
                     return;
                 }
 
-                // Игрок мог уйти за время загрузки. Если уже не нужен — сразу выгружаем.
-                // ВАЖНО: проверяем ОБА расстояния (current И predicted) — иначе ломается
-                // предиктивная подгрузка (чанк, загруженный для prediction, сразу же ушёл бы
-                // на выгрузку). ForceLoad обходит проверку — это контракт EnsureChunkLoaded.
+                // The player may have moved away during the load. If no longer wanted, unload now.
+                // IMPORTANT: check BOTH distances (current AND predicted) — otherwise predictive
+                // prefetch breaks (a chunk loaded for prediction would immediately go to unload).
+                // ForceLoad bypasses the check — that's the EnsureChunkLoaded contract.
                 if (!entry.ForceLoad && IsBeyondUnloadRange(entry.Coord))
                 {
-                    if (verboseLogging)
-                        Log($"{entry.Coord} загрузился, но игрок ушёл — сразу выгружаю.");
                     BeginUnload(entry);
                     ResolveBarriers(entry, success: false);
                     return;
                 }
 
                 entry.State = ChunkState.Loaded;
-                entry.ForceLoad = false; // флаг свою задачу выполнил
-                if (verboseLogging) Log($"✓ {entry.Coord} ('{addr}') загружен.");
+                entry.ForceLoad = false; // flag has done its job
 
                 try { OnAfterChunkLoad?.Invoke(entry.Coord, op.Result.Scene); }
                 catch (Exception e) { Debug.LogException(e); }
@@ -653,7 +626,7 @@ namespace ProjectName.World
         }
 
         // ============================================================
-        // Unload (timed) — entries сохраняются с Available, не удаляются
+        // Unload (timed) — entries are kept as Available, not deleted
         // ============================================================
 
         void MarkPendingUnload(ChunkCoord c)
@@ -662,7 +635,6 @@ namespace ProjectName.World
             if (entry.State != ChunkState.Loaded) return;
             entry.State = ChunkState.PendingUnload;
             entry.UnloadAtTime = Time.unscaledTime + unloadDelaySeconds;
-            if (verboseLogging) Log($"{c} на таймер выгрузки ({unloadDelaySeconds:F1}с).");
         }
 
         void ProcessPendingUnloads()
@@ -678,26 +650,24 @@ namespace ProjectName.World
         }
 
         /// <summary>
-        /// Запускает выгрузку чанка. UnloadSceneAsync асинхронный — пока он не завершится,
-        /// чанк висит в состоянии Unloading. Если в это время кто-то вызовет RequestLoad
-        /// или EnsureChunkLoaded на этом чанке — ставим entry.ReloadAfterUnload, и после
-        /// завершения выгрузки сразу пускаем в Queued. Так избегаем гонки "состояние сказало
-        /// Available, а сцена ещё выгружается".
+        /// Kicks off a chunk unload. UnloadSceneAsync is async — until it completes,
+        /// the chunk stays in Unloading state. If RequestLoad or EnsureChunkLoaded fires
+        /// on this chunk in the meantime, we set entry.ReloadAfterUnload, and once unload
+        /// finishes we go straight to Queued. This avoids the race "state says Available
+        /// but the scene is still unloading".
         /// </summary>
         void BeginUnload(ChunkEntry entry)
         {
             if (!entry.SceneHandle.IsValid())
             {
-                // Нечего выгружать — handle уже невалидный.
+                // Nothing to unload — the handle is already invalid.
                 entry.State = ChunkState.Available;
                 return;
             }
 
-            // Persistence hook — последний шанс снять snapshot ДО уничтожения объектов.
+            // Persistence hook — last chance to snapshot BEFORE the objects are destroyed.
             try { OnBeforeChunkUnload?.Invoke(entry.Coord, entry.SceneHandle.Result.Scene); }
             catch (Exception e) { Debug.LogException(e); }
-
-            if (verboseLogging) Log($"← начинаю выгрузку {entry.Coord}.");
 
             var unloadHandle = Addressables.UnloadSceneAsync(entry.SceneHandle);
             entry.UnloadHandle = unloadHandle;
@@ -712,12 +682,10 @@ namespace ProjectName.World
                 {
                     entry.ReloadAfterUnload = false;
                     entry.State = ChunkState.Queued;
-                    if (verboseLogging) Log($"{entry.Coord}: Unloading → Queued (был запрос перезагрузки).");
                 }
                 else
                 {
                     entry.State = ChunkState.Available;
-                    if (verboseLogging) Log($"{entry.Coord}: выгружен → Available.");
                 }
             };
         }
@@ -734,24 +702,24 @@ namespace ProjectName.World
         }
 
         // ============================================================
-        // Memory budget — пока warning
+        // Memory budget — warning for now
         // ============================================================
 
         void CheckMemoryBudget()
         {
-            // Profiler.GetTotalAllocatedMemoryLong отдаёт ОБЪЕДИНЁННЫЙ объём управляемой и
-            // native памяти — текстуры, меши, аудио, gameobjects, сцены. То что нам и нужно
-            // для стриминга. GC.GetTotalMemory был бы только managed heap (как замечал ревью)
-            // и игнорировал бы основной вес — native ассеты загруженных сцен.
+            // Profiler.GetTotalAllocatedMemoryLong returns the COMBINED managed + native
+            // footprint — textures, meshes, audio, gameobjects, scenes. Exactly what we need
+            // for streaming. GC.GetTotalMemory would be managed heap only (as the review noted)
+            // and would miss the bulk — native assets of loaded scenes.
             long bytes = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong();
             float mb = bytes / (1024f * 1024f);
             if (mb > memoryBudgetMB)
             {
                 Debug.LogWarning(
-                    $"[ChunkStreamer] Бюджет памяти превышен: {mb:F0}/{memoryBudgetMB:F0} МБ " +
+                    $"[ChunkStreamer] Memory budget exceeded: {mb:F0}/{memoryBudgetMB:F0} MB " +
                     "(Profiler.GetTotalAllocatedMemoryLong, native+managed). " +
-                    $"Активных чанков: {CountByState(ChunkState.Loaded)}. " +
-                    "TODO: реализовать агрессивную выгрузку дальних.");
+                    $"Active chunks: {CountByState(ChunkState.Loaded)}. " +
+                    "TODO: implement aggressive unload of far chunks.");
             }
         }
 
@@ -762,9 +730,7 @@ namespace ProjectName.World
             return n;
         }
 
-        void Log(string msg) => Debug.Log($"[ChunkStreamer] {msg}");
-
         // ============================================================
-        // Gizmo — информативно, плавно следит за игроком
+        // Gizmo — informative, smoothly follows the player
     }
 }
