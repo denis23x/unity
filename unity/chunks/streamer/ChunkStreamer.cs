@@ -14,7 +14,7 @@ namespace ProjectName.World
     /// Integer chunk coordinate on the grid. Matches the XX/YY index in the
     /// Chunk_XX_YY.unity scene name produced by ChunkImport when exporting FBX chunks.
     /// Converting a coordinate to a world position is done via ChunkStreamer.ChunkWorldCenter —
-    /// the formula depends on gridSize and gridOrigin, so it is intentionally not here.
+    /// the formula depends on gridSize, so it is intentionally not here.
     /// Y here is the name in chunk coordinates, not to be confused with world Y (height).
     /// </summary>
     public readonly struct ChunkCoord : IEquatable<ChunkCoord>
@@ -78,12 +78,6 @@ namespace ProjectName.World
         [Header("Tracking target")]
         [SerializeField] Transform target;
 
-        [Header("Grid anchor")]
-        [Tooltip("World position where the WHOLE grid is centered (matches what ChunkImport does). " +
-                 "Default (0,0,0) — grid centered on the world origin. " +
-                 "Do NOT change at Play time — this shifts the entire grid and triggers a cascade of reloads.")]
-        [SerializeField] Vector3 gridOrigin = Vector3.zero;
-
         [Header("Grid")]
         [SerializeField, Min(1f)] float chunkSize = DefaultChunkSize;
         [Tooltip("Grid size in chunks (X = columns, Y = rows). Must match GRID_X / GRID_Y " +
@@ -95,7 +89,7 @@ namespace ProjectName.World
 
         [Header("Performance")]
         [SerializeField, Min(1)] int loadBudget = 3;
-        [SerializeField, Min(0f)] float unloadDelaySeconds = 10f;
+        [SerializeField, Min(0f)] float unloadDelaySeconds = 5f;
         [SerializeField, Min(0)] int predictiveLoadAhead = 2;
         [SerializeField, Min(0.05f)] float velocitySmoothing = 0.5f;
 
@@ -104,7 +98,7 @@ namespace ProjectName.World
         [SerializeField, Min(0f)] float predictiveMinSpeed = 1f;
 
         [Header("Memory budget (warning only for now)")]
-        [SerializeField, Min(64f)] float memoryBudgetMB = 4096f;
+        [SerializeField, Min(64f)] float memoryBudgetMB = 2048f;
         [SerializeField, Min(1f)] float memoryCheckInterval = 5f;
 
         // ============================================================
@@ -160,7 +154,6 @@ namespace ProjectName.World
         readonly List<ChunkEntry> _queueScratch = new();
         readonly HashSet<ChunkCoord> _desiredScratch = new();
 
-        Vector3 _origin;
         Vector3 _lastTargetPos;
         Vector3 _smoothedVelocity;
         ChunkCoord _lastCenter;
@@ -187,9 +180,6 @@ namespace ProjectName.World
                 return;
             }
 
-            // Origin is the ANCHOR of the global grid, not the player's position. The grid is
-            // pinned to world coordinates; the player just happens to land in one of its chunks.
-            _origin = gridOrigin;
             _lastTargetPos = target.position;
             _initialized = true;
 
@@ -245,33 +235,26 @@ namespace ProjectName.World
         // ============================================================
 
         /// <summary>
-        /// Origin for the current render. In Play mode — cached (snapshotted in Start);
-        /// in Edit mode — the live inspector value (so gizmos update on the fly
-        /// when editing gridOrigin without entering Play mode).
-        /// </summary>
-        Vector3 ActiveOrigin => _initialized ? _origin : gridOrigin;
-
-        /// <summary>
-        /// The chunk the player is currently in. Computed from gridOrigin: take the player's
-        /// position relative to the anchor and divide by chunkSize.
+        /// The chunk the player is currently in. The grid is always centered at world origin,
+        /// so we just divide the player's world position by chunkSize.
         /// </summary>
         public ChunkCoord CurrentChunk()
         {
-            Vector3 rel = target.position - ActiveOrigin;
+            Vector3 pos = target.position;
             // Same math as in ChunkImport.ImportOne:
             //   u_center = (col + 0.5 - gridSize.x/2) * chunkSize
             // Inverted to "which chunk a point u belongs to":
             //   col = floor(u / chunkSize + gridSize.x/2)
             // For 8×8/100m a player at world (0,0,0) → Chunk_04_04, at (-350,0,-350) → Chunk_00_00.
             return new ChunkCoord(
-                Mathf.FloorToInt(rel.x / chunkSize + gridSize.x * 0.5f),
-                Mathf.FloorToInt(rel.z / chunkSize + gridSize.y * 0.5f));
+                Mathf.FloorToInt(pos.x / chunkSize + gridSize.x * 0.5f),
+                Mathf.FloorToInt(pos.z / chunkSize + gridSize.y * 0.5f));
         }
 
         /// <summary>World center of a chunk (Y=0). Mirrors CurrentChunk.</summary>
         public Vector3 ChunkWorldCenter(ChunkCoord c)
         {
-            return ActiveOrigin + new Vector3(
+            return new Vector3(
                 (c.X + 0.5f - gridSize.x * 0.5f) * chunkSize,
                 0f,
                 (c.Y + 0.5f - gridSize.y * 0.5f) * chunkSize);
@@ -380,8 +363,16 @@ namespace ProjectName.World
             float speed = _smoothedVelocity.magnitude;
             if (speed < predictiveMinSpeed) return realCenter;
             Vector3 dir = _smoothedVelocity.normalized;
-            int dx = Mathf.RoundToInt(dir.x * predictiveLoadAhead);
-            int dy = Mathf.RoundToInt(dir.z * predictiveLoadAhead);
+            // Scale so the dominant axis equals predictiveLoadAhead BEFORE rounding.
+            // Naive `dir * predictiveLoadAhead` under-shoots on diagonals:
+            //   east (1, 0)        * 2 = (2.00, 0.00) → (+2,  0), Chebyshev 2 ahead
+            //   NE   (.707, .707)  * 2 = (1.41, 1.41) → (+1, +1), Chebyshev only 1 ahead
+            // → diagonal predictive ring almost overlaps current ring, real lookahead lost,
+            //   causes stalls on diagonal traversal. Max-axis normalization keeps the
+            //   predicted center at Chebyshev ≈ predictiveLoadAhead in every direction.
+            float scale = predictiveLoadAhead / Mathf.Max(Mathf.Abs(dir.x), Mathf.Abs(dir.z));
+            int dx = Mathf.RoundToInt(dir.x * scale);
+            int dy = Mathf.RoundToInt(dir.z * scale);
             return new ChunkCoord(realCenter.X + dx, realCenter.Y + dy);
         }
 

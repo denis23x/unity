@@ -4,39 +4,25 @@
 
             <ui:Tab label="Streamer">
                 <uie:PropertyField binding-path="target" />
-                <uie:PropertyField binding-path="gridOrigin" />
 
-                <ui:Foldout name="grid-foldout" text="Grid">
-                    <uie:PropertyField binding-path="chunkSize" />
-                    <uie:PropertyField binding-path="gridSize" />
-                    <uie:PropertyField binding-path="loadRadius" />
-                    <uie:PropertyField binding-path="unloadRadius" />
-                </ui:Foldout>
+                <uie:PropertyField binding-path="chunkSize" />
+                <uie:PropertyField binding-path="gridSize" />
+                <uie:PropertyField binding-path="loadRadius" />
+                <uie:PropertyField binding-path="unloadRadius" />
 
-                <ui:Foldout name="performance-foldout" text="Performance">
-                    <uie:PropertyField binding-path="loadBudget" />
-                    <uie:PropertyField binding-path="unloadDelaySeconds" />
-                    <uie:PropertyField binding-path="predictiveLoadAhead" />
-                    <uie:PropertyField binding-path="velocitySmoothing" />
-                    <uie:PropertyField binding-path="predictiveMinSpeed" />
-                </ui:Foldout>
+                <uie:PropertyField binding-path="loadBudget" />
+                <uie:PropertyField binding-path="unloadDelaySeconds" />
+                <uie:PropertyField binding-path="predictiveLoadAhead" />
+                <uie:PropertyField binding-path="velocitySmoothing" />
+                <uie:PropertyField binding-path="predictiveMinSpeed" />
 
-                <ui:Foldout name="memory-foldout" text="Memory budget">
-                    <uie:PropertyField binding-path="memoryBudgetMB" />
-                    <uie:PropertyField binding-path="memoryCheckInterval" />
-                </ui:Foldout>
+                <uie:PropertyField binding-path="memoryBudgetMB" />
+                <uie:PropertyField binding-path="memoryCheckInterval" />
             </ui:Tab>
 
             <ui:Tab label="Gizmo">
                 <uie:PropertyField binding-path="gizmos.enabled" />
                 <uie:PropertyField binding-path="gizmos.yLevel" />
-
-                <uie:PropertyField binding-path="gizmos.showGrid" />
-                <uie:PropertyField binding-path="gizmos.gridColor" />
-                <uie:PropertyField binding-path="gizmos.gridRadius" />
-
-                <uie:PropertyField binding-path="gizmos.showCurrentChunkOutline" />
-                <uie:PropertyField binding-path="gizmos.currentChunkColor" />
 
                 <uie:PropertyField binding-path="gizmos.showLoadRing" />
                 <uie:PropertyField binding-path="gizmos.loadRingColor" />
@@ -51,26 +37,8 @@
                 <uie:PropertyField binding-path="gizmos.velocityArrowColor" />
 
                 <uie:PropertyField binding-path="gizmos.showPlayerMarker" />
-                <uie:PropertyField binding-path="gizmos.playerMarkerColor" />
-                <uie:PropertyField binding-path="gizmos.playerCenterDotColor" />
-                <uie:PropertyField binding-path="gizmos.showPlayerLabel" />
-                <uie:PropertyField binding-path="gizmos.playerLabelColor" />
-
-                <uie:PropertyField binding-path="gizmos.showChunkFills" />
-                <uie:PropertyField binding-path="gizmos.loadedInRingColor" />
-                <uie:PropertyField binding-path="gizmos.loadedInBufferColor" />
-                <uie:PropertyField binding-path="gizmos.loadingColor" />
-                <uie:PropertyField binding-path="gizmos.queuedColor" />
-                <uie:PropertyField binding-path="gizmos.pendingUnloadColor" />
-                <uie:PropertyField binding-path="gizmos.availableColor" />
-                <uie:PropertyField binding-path="gizmos.checkingExistenceColor" />
-                <uie:PropertyField binding-path="gizmos.doesNotExistColor" />
 
                 <uie:PropertyField binding-path="gizmos.showChunkLabels" />
-                <uie:PropertyField binding-path="gizmos.chunkLabelColor" />
-
-                <uie:PropertyField binding-path="gizmos.showHUD" />
-                <uie:PropertyField binding-path="gizmos.hudColor" />
             </ui:Tab>
 
         </ui:TabView>
