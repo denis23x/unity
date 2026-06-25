@@ -3,10 +3,10 @@
         <ui:TabView name="main-tabs">
 
             <ui:Tab label="Files">
-                <ui:TextField name="source-folder" label="Source folder" />
-                <ui:TextField name="dest-folder" label="Dest folder" />
-                <uie:FloatField name="chunk-size" label="Chunk size, m" />
-                <ui:TextField name="scene-prefix" label="Scene prefix" />
+                <ui:TextField name="source-folder" label="Source Folder" />
+                <ui:TextField name="dest-folder" label="Dest Folder" />
+                <uie:FloatField name="chunk-size" label="Chunk Size, m" />
+                <ui:TextField name="scene-prefix" label="Scene Prefix" />
                 <ui:Toggle name="add-mesh-collider" label="Add MeshCollider" />
                 <ui:Button name="btn-import" text="Import Files" class="action-button" />
                 <ui:Button name="btn-delete-chunks" text="Delete Scenes" class="action-button" />
@@ -20,11 +20,9 @@
             </ui:Tab>
 
             <ui:Tab label="Navmeshes">
-                <ui:Foldout name="navmesh-prefabs-foldout" text="Navmesh Prefabs" value="true">
-                    <ui:TextField name="tiles-dest" label="Tiles dest" />
-                    <ui:Button name="btn-create-prefab" text="Create Navmesh Prefab" class="action-button" />
-                    <ui:Button name="btn-delete-tiles" text="Delete Tiles" class="action-button" />
-                </ui:Foldout>
+                <ui:TextField name="tiles-dest" label="Tiles Dest" />
+                <ui:Button name="btn-create-prefab" text="Create Navmesh Prefab" class="action-button" />
+                <ui:Button name="btn-delete-tiles" text="Delete Tiles" class="action-button" />
                 <ui:Foldout name="navmesh-modifiers-foldout" text="Navmesh Modifiers" value="true">
                     <ui:VisualElement name="configs-container" />
                     <ui:Button name="btn-add-config" text="Add Config" />

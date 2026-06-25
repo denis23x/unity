@@ -13,8 +13,8 @@
                 <uie:PropertyField binding-path="loadBudget" />
                 <uie:PropertyField binding-path="unloadDelaySeconds" />
                 <uie:PropertyField binding-path="predictiveLoadAhead" />
-                <uie:PropertyField binding-path="velocitySmoothing" />
                 <uie:PropertyField binding-path="predictiveMinSpeed" />
+                <uie:PropertyField binding-path="velocitySmoothing" />
 
                 <uie:PropertyField binding-path="memoryBudgetMB" />
                 <uie:PropertyField binding-path="memoryCheckInterval" />

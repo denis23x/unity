@@ -30,22 +30,20 @@ namespace ProjectName.World
         [System.Serializable]
         public class GizmoSettings
         {
-            [Header("Load ring (loadRadius)")]
+            [Header("Load Radius")]
             public bool showLoadRing = true;
             public Color loadRingColor = new Color(0f, 1f, 0f, 0.20f);
 
-            [Header("Unload ring (unloadRadius)")]
+            [Header("Unload Radius")]
             public bool showUnloadRing = true;
             public Color unloadRingColor = new Color(1f, 0f, 0f, 0.15f);
 
-            [Header("Predictive ring")]
+            [Header("Predictive Radius")]
             public bool showPredictiveRing = true;
             public Color predictiveRingColor = new Color(0.3f, 0.7f, 1f, 0.20f);
 
-            [Header("Player marker")]
             public bool showPlayerMarker = true;
 
-            [Header("Chunk labels")]
             public bool showChunkLabels = true;
         }
 

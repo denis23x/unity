@@ -75,30 +75,64 @@ namespace ProjectName.World
         // Configuration
         // ============================================================
 
-        [Header("Tracking target")]
+        [Header("Tracking Target")]
+        [Tooltip("Object whose world position the streamer tracks each frame (usually the " +
+                 "player or main camera). All load/unload decisions are derived from this " +
+                 "transform — if it gets destroyed the streamer disables itself.")]
         [SerializeField] Transform target;
 
         [Header("Grid")]
+        [Tooltip("Size of one chunk in meters. MUST match `chunk_w` / `chunk_h` from the " +
+                 "Blender export script — a mismatch puts chunks at wrong physical positions " +
+                 "and the streamer maps the player to a different chunk than the one rendered.")]
         [SerializeField, Min(1f)] float chunkSize = DefaultChunkSize;
         [Tooltip("Grid size in chunks (X = columns, Y = rows). Must match GRID_X / GRID_Y " +
                  "in the Blender export script. Used both to translate the player's world position " +
                  "into a Chunk_XX_YY coordinate, and to cull requests outside the grid bounds.")]
         [SerializeField] Vector2Int gridSize = new Vector2Int(DefaultGridDimension, DefaultGridDimension);
+        [Tooltip("Chebyshev (square) radius in chunks around the player's current chunk that " +
+                 "is kept loaded. 1 = a 3×3 area (current + 8 neighbors), 2 = 5×5, etc. " +
+                 "Higher = smoother streaming and more visible range, but more memory.")]
         [SerializeField, Min(0)] int loadRadius = 1;
+        [Tooltip("Chebyshev radius beyond which chunks get scheduled for unload. MUST be > " +
+                 "loadRadius — the gap is hysteresis: chunks in the band (loadRadius, unloadRadius] " +
+                 "stay in memory so brief boundary crossings don't cause reload-flicker.")]
         [SerializeField, Min(1)] int unloadRadius = 2;
 
         [Header("Performance")]
+        [Tooltip("Max number of LoadSceneAsync operations allowed in-flight at the same time. " +
+                 "Does NOT cap how many chunks are loaded in total or how much memory is used — " +
+                 "only concurrency. Higher = faster catch-up after teleport, more risk of frame " +
+                 "spikes; lower = smoother per-frame I/O cost, slower fill-in.")]
         [SerializeField, Min(1)] int loadBudget = 3;
+        [Tooltip("Seconds a chunk stays in memory after it leaves unloadRadius, before " +
+                 "UnloadSceneAsync actually runs. If the player walks back into range during " +
+                 "this window the unload is cancelled. Smooths zigzag movement near the boundary.")]
         [SerializeField, Min(0f)] float unloadDelaySeconds = 5f;
-        [SerializeField, Min(0)] int predictiveLoadAhead = 2;
+
+        [Header("Predictive")]
+        [Tooltip("Chebyshev distance (in chunks) the prefetch ring is offset in the direction " +
+                 "of motion. Fixed offset — kicks in fully as soon as speed crosses " +
+                 "predictiveMinSpeed, regardless of how fast above the threshold. 0 disables " +
+                 "predictive prefetch entirely. Larger = earlier head-start, more peak memory.")]
+        [SerializeField, Min(0)] int predictiveLoadAhead = 1;
+        [Tooltip("Minimum speed (m/s) at which predictive prefetch kicks in. Below this the " +
+                 "predicted center collapses onto the real one. Guard against jitter at " +
+                 "near-zero speed (otherwise normalized direction is random noise).")]
+        [SerializeField, Min(0f)] float predictiveMinSpeed = 5f;
+        [Tooltip("Time constant (seconds) for exponential smoothing of velocity used by " +
+                 "predictive prefetch. Larger = predicted direction is more inertial (less " +
+                 "jitter on quick steering); smaller = reacts faster but flickers prefetch " +
+                 "ring on every micro-turn.")]
         [SerializeField, Min(0.05f)] float velocitySmoothing = 0.5f;
 
-        [Tooltip("Minimum speed (m/s) at which predictive prefetch kicks in. " +
-                 "Guard against jitter at near-zero speed.")]
-        [SerializeField, Min(0f)] float predictiveMinSpeed = 1f;
-
-        [Header("Memory budget (warning only for now)")]
+        [Header("Memory Budget")]
+        [Tooltip("Soft cap in megabytes (combined managed + native, from " +
+                 "Profiler.GetTotalAllocatedMemoryLong). Emits a console warning when exceeded — " +
+                 "no auto-unload yet. Use it as an early signal that loadRadius is too generous.")]
         [SerializeField, Min(64f)] float memoryBudgetMB = 2048f;
+        [Tooltip("How often (seconds) the memory check runs. The check itself is cheap " +
+                 "(one Profiler call), so 1–5s is fine. Lower = more responsive warning.")]
         [SerializeField, Min(1f)] float memoryCheckInterval = 5f;
 
         // ============================================================
