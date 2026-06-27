@@ -21,5 +21,5 @@ The pipeline
 8. Save & Play
 
 > [!NOTE]
-> Use manager if you have a [A* Pathfinding Project](https://arongranberg.com/astar/)
+> Use **manager** if you have a [A* Pathfinding Project](https://arongranberg.com/astar/)\
 > Use **manager-no-navmesh** if you don’t
