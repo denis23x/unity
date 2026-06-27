@@ -363,17 +363,45 @@ for key in list(chunk_colls.keys()):
         empty += 1
 log(f"Removed {empty} empty chunks, {len(chunk_colls)} non-empty remain")
 
-# ── Step 7: FBX export with temporary centring ──
+# ── Step 7: FBX export with temporary centring (bake-aware) ──
 # Each chunk's mesh objects are temporarily shifted by -pivot so the FBX
 # origin lands at (0, 0, 0). Original locations are restored unconditionally
 # in a finally block so the scene is never left in a shifted state even if
 # the exporter raises an exception.
 #
+# IMPORTANT — why per-object baking is needed:
+#   Step 5 links small/whole objects (sidewalks, driveways, buildings) directly
+#   into chunk collections WITHOUT slicing. These objects keep their original
+#   parametric setup — Array/Curve/Shrinkwrap modifiers and Shrinkwrap object
+#   constraints that all react to the object's world position. When the pivot
+#   shift below moves an object's origin, those modifiers and constraints
+#   silently re-fire from the NEW origin: Curve picks a new starting point on
+#   the spline, Shrinkwrap modifier projects each vertex onto a different
+#   terrain XY, Shrinkwrap constraint snaps the object's Z to a different
+#   terrain point. The exported FBX captures this wrong evaluated state.
+#
+#   Roads and the railroad were never affected because they go through the
+#   Step 4 slice pipeline, which evaluates the mesh ONCE (with modifiers
+#   applied) before any shift, then produces static part objects that own
+#   plain baked geometry. The shift on those parts is purely a transform
+#   move and cannot re-evaluate anything.
+#
+#   The fix: for every "live" object (one with modifiers OR constraints)
+#   we evaluate its current state, write the evaluated mesh into a temporary
+#   datablock, copy the constraint-applied world translation into location,
+#   mute everything that could re-fire, THEN apply the pivot shift. After
+#   the export we restore mesh data, location and the original mute states.
+#
+#   Once the scene has had Apply pressed on all modifiers/constraints and
+#   becomes static meshes, the `has_constraints or has_modifiers` check
+#   below returns False for every object — the bake branch is skipped
+#   entirely and the export runs the original cheap path with zero overhead.
+#
 # FBX export settings are chosen to match the Unity standard preset:
 #   use_space_transform=True + bake_space_transform=False stores mesh data in
 #   Blender's Z-up coordinate system and adds a compensating rotation on the
 #   FBX root node. Unity reads that root rotation to flip the asset to Y-up.
-#   The Unity ChunkImport script preserves this root rotation and only resets
+#   The Unity ChunkImporter script preserves this root rotation and only resets
 #   the child's localPosition — do NOT change these two flags without updating
 #   the Unity importer as well.
 if DO_EXPORT:
@@ -382,6 +410,7 @@ if DO_EXPORT:
     orig_active = bpy.context.view_layer.objects.active
     orig_sel = list(bpy.context.selected_objects)
     exported = 0
+    total_baked = 0
 
     for (cx, cy), cc in chunk_colls.items():
         mesh_objs = [o for o in cc.objects if o.type == 'MESH']
@@ -390,23 +419,84 @@ if DO_EXPORT:
 
         pivot = chunk_pivot(cx, cy)
 
-        # Save world-space locations before the temporary shift.
-        saved_locations = [(o, o.location.copy()) for o in mesh_objs]
+        # Per-object saved state. Every object carries its original location
+        # for the unconditional final restore. Objects flagged is_baked also
+        # carry mesh + mute snapshots so the bake can be reversed cleanly.
+        # Objects without modifiers AND without constraints stay is_baked=False
+        # — they take the cheap shift-only path.
+        saved_states = []
 
         try:
-            # Move every object in the chunk so the chunk pivot is at origin.
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+
+            # Phase A — bake live objects so the upcoming shift cannot
+            # trigger constraint/modifier re-evaluation.
             for o in mesh_objs:
-                o.location = o.location - pivot
+                state = {
+                    'obj': o,
+                    'original_location': o.location.copy(),
+                    'is_baked': False,
+                    'original_mesh': None,
+                    'baked_mesh': None,
+                    'constraint_mutes': None,
+                    'modifier_visibilities': None,
+                }
+
+                has_constraints = len(o.constraints) > 0
+                has_modifiers = len(o.modifiers) > 0
+
+                if has_constraints or has_modifiers:
+                    state['is_baked'] = True
+                    state['constraint_mutes'] = [c.mute for c in o.constraints]
+                    state['modifier_visibilities'] = [m.show_viewport for m in o.modifiers]
+
+                    obj_eval = o.evaluated_get(depsgraph)
+
+                    if has_modifiers:
+                        # Capture the modifier-evaluated mesh in the object's
+                        # local space and swap it in. The original mesh
+                        # datablock stays referenced via state['original_mesh']
+                        # so other users of it (linked duplicates, action
+                        # editor, etc.) are untouched.
+                        state['original_mesh'] = o.data
+                        baked = bpy.data.meshes.new_from_object(obj_eval)
+                        baked.name = f"__chunk_bake_{o.name}"
+                        state['baked_mesh'] = baked
+                        o.data = baked
+
+                    if has_constraints:
+                        # Copy the constraint-applied world translation into
+                        # location so once the constraint is muted the object
+                        # stays in the right place.
+                        o.location = obj_eval.matrix_world.translation.copy()
+
+                    # Freeze everything that could re-fire after the shift.
+                    for c in o.constraints:
+                        c.mute = True
+                    for m in o.modifiers:
+                        m.show_viewport = False
+
+                    total_baked += 1
+
+                saved_states.append(state)
+
+            # Make sure the depsgraph sees the bakes + mutes before shifting.
             bpy.context.view_layer.update()
 
-            # Select only the objects belonging to this chunk for export.
+            # Phase B — pivot shift. With everything baked and muted this is
+            # a pure origin move; no re-evaluation can corrupt the geometry.
+            for state in saved_states:
+                state['obj'].location = state['obj'].location - pivot
+            bpy.context.view_layer.update()
+
+            # Phase C — select this chunk's objects and run the FBX export.
             bpy.ops.object.select_all(action='DESELECT')
             for o in mesh_objs:
                 o.select_set(True)
             bpy.context.view_layer.objects.active = mesh_objs[0]
 
-            # Output filename: XX_YY.fbx — XX = column (X), YY = row (Y/Z).
-            # The Unity ChunkImport expects exactly this naming convention.
+            # Output filename: NN_MM.fbx — NN = column (X), MM = row (Y/Z).
+            # The Unity ChunkImporter expects exactly this naming convention.
             filepath = os.path.join(OUTPUT_DIR, f"{cx:02d}_{cy:02d}.fbx")
             bpy.ops.export_scene.fbx(
                 filepath=filepath,
@@ -431,13 +521,30 @@ if DO_EXPORT:
                 bake_anim=False,
             )
             exported += 1
+            baked_here = sum(1 for s in saved_states if s['is_baked'])
             log(f"  {cx:02d}_{cy:02d}.fbx "
-                f"({len(mesh_objs)} obj, pivot at "
+                f"({len(mesh_objs)} obj, {baked_here} baked, pivot at "
                 f"{pivot.x:.1f},{pivot.y:.1f})")
         finally:
-            # Always restore original locations, even if the exporter failed.
-            for o, loc in saved_locations:
-                o.location = loc
+            # Phase D — unconditional restore. Even if anything above raised,
+            # the scene must end up exactly as it started: original location,
+            # original mesh datablock, original mute states.
+            for state in saved_states:
+                state['obj'].location = state['original_location']
+
+            for state in saved_states:
+                if not state['is_baked']:
+                    continue
+                o = state['obj']
+                if state['baked_mesh'] is not None:
+                    o.data = state['original_mesh']
+                    # The bake datablock now has zero users — drop it.
+                    bpy.data.meshes.remove(state['baked_mesh'])
+                for c, mute in zip(o.constraints, state['constraint_mutes']):
+                    c.mute = mute
+                for m, vis in zip(o.modifiers, state['modifier_visibilities']):
+                    m.show_viewport = vis
+
             bpy.context.view_layer.update()
 
     # Restore the original selection and active object.
@@ -449,7 +556,7 @@ if DO_EXPORT:
         try: bpy.context.view_layer.objects.active = orig_active
         except: pass
 
-    log(f"Exported {exported} FBX files")
+    log(f"Exported {exported} FBX files, baked {total_baked} live objects total")
 
 log("Done.")
 
