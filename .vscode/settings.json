@@ -1,0 +1,12 @@
+{
+    "workbench.colorCustomizations": {
+        "statusBar.background": "#f24841",
+        "statusBar.foreground": "#e7e7e7",
+        "statusBarItem.hoverBackground": "#f57671",
+        "statusBarItem.remoteBackground": "#f24841",
+        "statusBarItem.remoteForeground": "#e7e7e7"
+    },
+    "workbench.activityBar.location": "default",
+    "workbench.activityBar.orientation": "vertical",
+    "explorer.autoReveal": false
+}
