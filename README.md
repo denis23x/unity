@@ -10,7 +10,6 @@ The pipeline
     - Select the area and export it
 2. Add Blosm Blender Add-on [Github](https://github.com/solido3d/blender-osm)
     - Open your downloaded data with add-on
-3. Add Blender To Unity FBX Exporter Blender Add-on [Github](https://github.com/EdyJ/blender-to-unity-fbx-exporter/tree/master)
 3. Use `chunks_export.py` script in Blender to export chunks
 4. Copy chunks **manager-no-navmesh** folder into your Unity project `Assets/Editor`
     - Open it in Unity menu Tools → Chunks → Chunk Manager
