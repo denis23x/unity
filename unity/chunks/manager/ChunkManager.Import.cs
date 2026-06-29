@@ -2,24 +2,31 @@
 //
 // FBX → per-chunk .unity scene pipeline. ImportChunks scans sourceFolder for
 // XX_YY.fbx files, derives the grid bounds, and writes one scene per chunk
-// via ImportOne. The mesh-bake half (BakeChunkToIdentity + the matrix-baking
-// helper) lives at the bottom — it's how each chunk lands with identity TRS
-// in the Inspector despite the Blender→Unity axis compensation that the
-// FBX import leaves on the root.
+// via ImportOne.
 //
-// Mesh-bake pipeline:
-//   Blender's FBX export gives every instantiated chunk a non-identity local
-//   transform on the FBX root (typically scale=100 and a -90°X rotation). The
-//   transform is what makes the mesh data render in Unity coordinates; wiping
-//   it directly lays the chunks on their side. To get clean identity TRS in
-//   the Inspector we bake the transform into a fresh copy of each MeshFilter's
-//   mesh (vertices, normals, tangents, and winding if the matrix is a
-//   reflection), and only THEN reset every Transform in the inst subtree to
-//   identity. The baked meshes are NOT written out as separate .asset files —
-//   they stay in memory and Unity serialises them inline inside the .unity
-//   scene when SaveScene runs. Each chunk has unique geometry so inlining
-//   avoids both Project-window clutter and any duplication concern. The
-//   original FBX is left untouched and can still be re-imported normally.
+// Per-chunk scene layout:
+//   <scenePath>
+//     _Geometry  (chunk world centre, identity rotation)
+//       <FBX prefab instance>      ← PrefabUtility.InstantiatePrefab, NOT unpacked
+//       (anything else the user adds here is preserved across re-imports)
+//     _Logic     (chunk world centre, identity rotation)
+//       (user-owned subtree; Import never touches it)
+//
+// Ensure-instance semantics:
+//   * No scene file on disk → create scene, spawn _Geometry + _Logic, instantiate
+//     the FBX under _Geometry, add MeshColliders (if enabled), save.
+//   * Scene already on disk → open it (additive), make sure _Geometry / _Logic
+//     exist, and add the FBX prefab instance only if no connected instance of
+//     that FBX is already under _Geometry. Never delete anything, never reset
+//     transforms on existing nodes. Existing FBX instances pick up Blender edits
+//     automatically through the prefab → asset link on Unity's FBX reimport.
+//
+// ModelImporter side: bakeAxisConversion is forced ON so Unity bakes the
+// Blender→Unity axis conversion into the mesh data and the FBX root lands
+// with identity TRS in the hierarchy. This is the only model-import setting
+// we touch; it's an asset-pipeline flag (no scene-side mesh mutation) and it
+// does NOT break the PrefabUtility connection that keeps existing chunk
+// scenes refreshing when an FBX re-exports.
 
 using System.Collections.Generic;
 using System.IO;
@@ -90,7 +97,7 @@ namespace ProjectName.EditorTools
             }
 
             var prevActive = EditorSceneManager.GetActiveScene();
-            int written = 0;
+            int written = 0, addedInstances = 0;
 
             try
             {
@@ -101,8 +108,9 @@ namespace ProjectName.EditorTools
                         $"{e.a:00}_{e.b:00}  ({i + 1}/{entries.Count})",
                         (float)i / entries.Count);
 
-                    if (ImportOne(e, minA, minB, countA, countB))
-                        written++;
+                    var result = ImportOne(e, minA, minB, countA, countB);
+                    if (result.saved)         written++;
+                    if (result.spawnedNewFbx) addedInstances++;
                 }
             }
             finally
@@ -115,13 +123,18 @@ namespace ProjectName.EditorTools
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
 
-            Debug.Log($"[ChunkManager] DONE. {written}/{entries.Count} scenes written to {destFolder}.");
+            Debug.Log($"[ChunkManager] DONE. {written}/{entries.Count} scenes saved, " +
+                      $"{addedInstances} new FBX prefab instance(s) added. Destination: {destFolder}.");
 
             EditorUtility.DisplayDialog("Chunk Manager",
-                $"Done.\n{written}/{entries.Count} scenes written to:\n{destFolder}", "OK");
+                $"Done.\n{written}/{entries.Count} scenes saved\n" +
+                $"{addedInstances} new FBX prefab instance(s) added\n\n{destFolder}",
+                "OK");
         }
 
-        bool ImportOne(Entry e, int minA, int minB, int countA, int countB)
+        struct ImportResult { public bool saved; public bool spawnedNewFbx; }
+
+        ImportResult ImportOne(Entry e, int minA, int minB, int countA, int countB)
         {
             // XX = col along Unity X, YY = row along Unity Z (matches the Blender split script).
             int col = e.a - minA;
@@ -135,204 +148,157 @@ namespace ProjectName.EditorTools
             string baseName  = $"{sceneNamePrefix}{e.a:00}_{e.b:00}";
             string scenePath = $"{destFolder}/{baseName}.unity";
 
-            // Create scene additively — does not unload currently open scenes.
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            // Resolve the working scene: reuse if already loaded in the hierarchy,
+            // open additively if the file exists on disk but isn't loaded, or
+            // create a fresh empty scene if there's no file yet. Tracking the
+            // pre-existing load state lets us avoid closing scenes the user had
+            // open for editing.
+            bool fileExists = File.Exists(scenePath);
+            Scene scene = default;
+            bool wasAlreadyLoaded = false;
+
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var s = SceneManager.GetSceneAt(i);
+                if (s.path == scenePath)
+                {
+                    scene = s;
+                    wasAlreadyLoaded = s.isLoaded;
+                    if (!s.isLoaded)
+                        scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive);
+                    break;
+                }
+            }
+
+            if (!scene.IsValid())
+            {
+                scene = fileExists
+                    ? EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive)
+                    : EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            }
+
             EditorSceneManager.SetActiveScene(scene);
 
-            // Root GameObject — placed at chunk's world center.
-            var root = new GameObject(baseName);
-            root.transform.SetPositionAndRotation(rootPos, Quaternion.identity);
-            SceneManager.MoveGameObjectToScene(root, scene);
+            // _Geometry and _Logic are created once at chunk centre. On
+            // subsequent imports we only look them up — never reposition or
+            // recreate — so any manual transform tweaks the user made survive.
+            var geometryGO = FindOrCreateRoot(scene, GeometryRootName, rootPos);
+            FindOrCreateRoot(scene, LogicRootName, rootPos);
 
-            // Force bakeAxisConversion=true so Unity bakes the Blender Z-up →
-            // Y-up rotation into the mesh data instead of leaving a compensating
-            // rotation on the FBX root. Without this, the use_space_transform=True
-            // export produces a root rotation that lands the chunk content
-            // mirrored 180° on the horizontal plane.
-            // Also force isReadable=true so the bake step below can read mesh
-            // vertex data at edit time.
+            // Force bakeAxisConversion=true so the FBX root lands identity
+            // in Unity (Blender's use_space_transform export otherwise leaves
+            // a compensating rotation on the root). Cheap: SaveAndReimport is
+            // a no-op when the flag is already on, so subsequent imports skip it.
             var modelImporter = AssetImporter.GetAtPath(e.assetPath) as ModelImporter;
-            if (modelImporter != null && (!modelImporter.bakeAxisConversion || !modelImporter.isReadable))
+            if (modelImporter != null && !modelImporter.bakeAxisConversion)
             {
                 modelImporter.bakeAxisConversion = true;
-                modelImporter.isReadable = true;
                 modelImporter.SaveAndReimport();
             }
 
-            // Instantiate FBX as a model-prefab instance (reimports propagate later).
             var fbx = AssetDatabase.LoadAssetAtPath<GameObject>(e.assetPath);
             if (fbx == null)
             {
                 Debug.LogError($"[ChunkManager] Could not load FBX asset: {e.assetPath}");
+                if (!fileExists && !wasAlreadyLoaded)
+                    EditorSceneManager.CloseScene(scene, removeScene: true);
+                return new ImportResult { saved = false, spawnedNewFbx = false };
+            }
+
+            bool spawnedNewFbx = false;
+
+            // Ensure-instance check: only spawn the FBX prefab when no
+            // connected instance of this exact asset is parented under
+            // _Geometry. This is what prevents Import from duplicating chunks
+            // or stomping on user-applied prefab overrides. Existing instances
+            // pick up Blender re-exports automatically through Unity's prefab
+            // → FBX reimport — Import doesn't need to do anything for them.
+            if (!HasConnectedFbxInstance(geometryGO.transform, e.assetPath))
+            {
+                var inst = (GameObject)PrefabUtility.InstantiatePrefab(fbx, scene);
+                inst.transform.SetParent(geometryGO.transform, worldPositionStays: false);
+                inst.transform.localPosition = Vector3.zero;
+                spawnedNewFbx = true;
+
+                if (addMeshCollider)
+                {
+                    // Non-convex MeshCollider tracks the prefab's mesh data via
+                    // sharedMesh; if the FBX reimports with new geometry, the
+                    // collider's bounds refresh automatically. Added as a
+                    // prefab-instance override on each sub-GameObject so the
+                    // FBX asset stays untouched.
+                    foreach (var mf in inst.GetComponentsInChildren<MeshFilter>(includeInactive: true))
+                    {
+                        if (mf.sharedMesh == null) continue;
+                        if (mf.gameObject.GetComponent<MeshCollider>() != null) continue;
+                        var mc = mf.gameObject.AddComponent<MeshCollider>();
+                        mc.sharedMesh = mf.sharedMesh;
+                        mc.convex = false;
+                    }
+                }
+            }
+
+            // The transform / hierarchy edits above always dirty the scene when
+            // we spawned a new prefab instance or created either root; an idle
+            // re-import of an unchanged scene still calls MarkSceneDirty to
+            // make SaveScene a no-op on disk if nothing actually moved.
+            EditorSceneManager.MarkSceneDirty(scene);
+
+            bool ok = fileExists
+                ? EditorSceneManager.SaveScene(scene)
+                : EditorSceneManager.SaveScene(scene, scenePath);
+
+            // Only close scenes we opened ourselves. Scenes that were already
+            // loaded before Import ran (e.g. the user had them open for
+            // editing) stay loaded.
+            if (!wasAlreadyLoaded)
                 EditorSceneManager.CloseScene(scene, removeScene: true);
-                return false;
-            }
 
-            var inst = (GameObject)PrefabUtility.InstantiatePrefab(fbx, scene);
-            inst.transform.SetParent(root.transform, worldPositionStays: false);
-            inst.transform.localPosition = Vector3.zero;
-
-            // The bake step replaces every MeshFilter's mesh with a fresh copy
-            // and then wipes all local TRS to identity. Unpacking is mandatory
-            // here because we're swapping out prefab-owned references; leaving
-            // the prefab connection would either reject the mesh override or
-            // revert it on the next FBX reimport.
-            PrefabUtility.UnpackPrefabInstance(inst, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
-
-            BakeChunkToIdentity(root, inst, baseName);
-
-            if (addMeshCollider)
+            if (!ok)
             {
-                // Non-convex MeshCollider matches the visible geometry 1:1 and
-                // works for static environment (no Rigidbody on the chunk).
-                // sharedMesh points at the just-baked mesh, so the collision
-                // shape lives in the same local space as the renderer.
-                foreach (var mf in inst.GetComponentsInChildren<MeshFilter>(includeInactive: true))
-                {
-                    if (mf.sharedMesh == null) continue;
-                    var mc = mf.gameObject.GetComponent<MeshCollider>();
-                    if (mc == null) mc = mf.gameObject.AddComponent<MeshCollider>();
-                    mc.sharedMesh = mf.sharedMesh;
-                    mc.convex = false;
-                }
+                Debug.LogError($"[ChunkManager] Failed to save: {scenePath}");
+            }
+            else
+            {
+                string action = !fileExists ? "created" : spawnedNewFbx ? "added FBX instance" : "left as-is";
+                Debug.Log($"[ChunkManager] {baseName}  →  {action}  @ ({rootPos.x:F1}, {rootPos.y:F1}, {rootPos.z:F1})  [col={col}, row={row}]");
             }
 
-            bool ok = EditorSceneManager.SaveScene(scene, scenePath);
-            EditorSceneManager.CloseScene(scene, removeScene: true);
-
-            if (!ok) Debug.LogError($"[ChunkManager] Failed to save: {scenePath}");
-            else     Debug.Log($"[ChunkManager] {baseName}  →  root @ ({rootPos.x:F1}, {rootPos.y:F1}, {rootPos.z:F1})  [col={col}, row={row}]");
-
-            return ok;
+            return new ImportResult { saved = ok, spawnedNewFbx = spawnedNewFbx };
         }
 
-        // ── Mesh bake pipeline ──────────────────────────────────────────────
-        // The FBX import preserves the Blender→Unity coordinate compensation as
-        // a non-identity local transform on the instantiated GameObject. The
-        // methods below rewrite each MeshFilter's mesh so the vertex data lives
-        // in the chunk root's local space, allowing every Transform under inst
-        // to be reset to identity without changing what's rendered.
-
-        void BakeChunkToIdentity(GameObject root, GameObject inst, string baseName)
+        // Walks the immediate children of `parent` and returns true if any of
+        // them is the root of a connected prefab instance whose source asset
+        // is the FBX at `fbxAssetPath`. Checking only the prefab-instance root
+        // avoids matching nested children of the FBX, which would also report
+        // the same source asset.
+        static bool HasConnectedFbxInstance(Transform parent, string fbxAssetPath)
         {
-            var meshFilters = inst.GetComponentsInChildren<MeshFilter>(includeInactive: true);
-
-            // Snapshot each MeshFilter's world position and its world
-            // rotation+scale matrix BEFORE mutating any Transform. Splitting
-            // the matrix is what restores the rotation pivot: only the
-            // rotation+scale part is baked into vertices, the translation
-            // goes back onto the GameObject Transform below. If we baked the
-            // full matrix instead, every Transform would sit at the chunk
-            // root and rotating a single building would swing it around the
-            // chunk centre rather than its own pivot.
-            var worldPositions = new Vector3[meshFilters.Length];
-            var worldRotScales = new Matrix4x4[meshFilters.Length];
-            for (int i = 0; i < meshFilters.Length; i++)
+            foreach (Transform child in parent)
             {
-                var m = meshFilters[i].transform.localToWorldMatrix;
-                worldPositions[i] = new Vector3(m.m03, m.m13, m.m23);
-                m.m03 = 0f; m.m13 = 0f; m.m23 = 0f;
-                worldRotScales[i] = m;
+                var go = child.gameObject;
+                if (!PrefabUtility.IsPartOfPrefabInstance(go)) continue;
+                if (PrefabUtility.GetNearestPrefabInstanceRoot(go) != go) continue;
+                var src = PrefabUtility.GetCorrespondingObjectFromSource(go);
+                if (src == null) continue;
+                if (AssetDatabase.GetAssetPath(src) == fbxAssetPath) return true;
             }
-
-            // Collapse every Transform under inst to identity so the FBX
-            // root's -90°X / scale 100 disappears from the hierarchy.
-            foreach (var t in inst.GetComponentsInChildren<Transform>(includeInactive: true))
-            {
-                t.localPosition = Vector3.zero;
-                t.localRotation = Quaternion.identity;
-                t.localScale    = Vector3.one;
-            }
-
-            // Restore each MeshFilter to its original world position and bake
-            // the matching rotation+scale into the mesh vertices. The
-            // resulting Transform has identity rotation+scale + the mesh's
-            // own world position, so rotating it pivots around the mesh
-            // itself. GetComponentsInChildren returns components in
-            // depth-first order, so a MeshFilter that is also an ancestor
-            // of another MeshFilter is placed before its descendants — the
-            // child's world position then lands correctly.
-            for (int i = 0; i < meshFilters.Length; i++)
-            {
-                var mf = meshFilters[i];
-                var source = mf.sharedMesh;
-                if (source == null) continue;
-
-                if (!source.isReadable)
-                {
-                    Debug.LogWarning($"[ChunkManager] {baseName}: source mesh '{source.name}' is not readable; skipping bake for this filter.");
-                    continue;
-                }
-
-                mf.transform.position = worldPositions[i];
-
-                var baked = BakeMeshThroughMatrix(source, worldRotScales[i]);
-                baked.name = $"{source.name}_baked";
-                // No CreateAsset call — leaving the mesh as a scene-owned
-                // object makes SaveScene serialise its data inline into the
-                // .unity file, so no extra .asset clutter is produced.
-                mf.sharedMesh = baked;
-            }
+            return false;
         }
 
-        static Mesh BakeMeshThroughMatrix(Mesh source, Matrix4x4 matrix)
+        // Looks up a top-level GameObject named `name` in `scene`; creates it
+        // at `position` (identity rotation) if missing. Position is only used
+        // on creation — existing roots keep whatever transform the user (or a
+        // previous Import) gave them.
+        static GameObject FindOrCreateRoot(Scene scene, string name, Vector3 position)
         {
-            var mesh = new Mesh();
-            if (source.vertexCount > 65535)
-                mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            foreach (var go in scene.GetRootGameObjects())
+                if (go.name == name) return go;
 
-            var vertices = source.vertices;
-            for (int i = 0; i < vertices.Length; i++)
-                vertices[i] = matrix.MultiplyPoint3x4(vertices[i]);
-            mesh.vertices = vertices;
-
-            var normals = source.normals;
-            if (normals != null && normals.Length > 0)
-            {
-                // Uniform-scale + rotation: MultiplyVector + normalize gives the
-                // right direction. Chunks don't use shear so we don't need the
-                // full inverse-transpose.
-                for (int i = 0; i < normals.Length; i++)
-                    normals[i] = matrix.MultiplyVector(normals[i]).normalized;
-                mesh.normals = normals;
-            }
-
-            var tangents = source.tangents;
-            if (tangents != null && tangents.Length > 0)
-            {
-                for (int i = 0; i < tangents.Length; i++)
-                {
-                    var dir = matrix.MultiplyVector((Vector3)tangents[i]).normalized;
-                    tangents[i] = new Vector4(dir.x, dir.y, dir.z, tangents[i].w);
-                }
-                mesh.tangents = tangents;
-            }
-
-            var uv  = source.uv;     if (uv.Length  > 0) mesh.uv  = uv;
-            var uv2 = source.uv2;    if (uv2.Length > 0) mesh.uv2 = uv2;
-            var uv3 = source.uv3;    if (uv3.Length > 0) mesh.uv3 = uv3;
-            var uv4 = source.uv4;    if (uv4.Length > 0) mesh.uv4 = uv4;
-            var colors = source.colors; if (colors.Length > 0) mesh.colors = colors;
-
-            // Reflections (negative-determinant matrices, e.g. an axis-swap)
-            // invert winding; reverse triangle order so front-face culling
-            // still renders the right side. Uniform positive scale + rotation
-            // keeps winding intact.
-            bool flipWinding = matrix.determinant < 0f;
-            mesh.subMeshCount = source.subMeshCount;
-            for (int sm = 0; sm < source.subMeshCount; sm++)
-            {
-                var tris = source.GetTriangles(sm);
-                if (flipWinding)
-                {
-                    for (int i = 0; i < tris.Length; i += 3)
-                        (tris[i + 1], tris[i + 2]) = (tris[i + 2], tris[i + 1]);
-                }
-                mesh.SetTriangles(tris, sm);
-            }
-
-            mesh.RecalculateBounds();
-            return mesh;
+            var created = new GameObject(name);
+            SceneManager.MoveGameObjectToScene(created, scene);
+            created.transform.SetPositionAndRotation(position, Quaternion.identity);
+            return created;
         }
     }
 }

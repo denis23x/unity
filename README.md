@@ -23,3 +23,7 @@ The pipeline
 > [!NOTE]
 > Use **manager** if you have a [A* Pathfinding Project](https://arongranberg.com/astar/)\
 > Use **manager-no-navmesh** if you don’t
+
+## Awesome Links
+
+- [Blender To Unity FBX Exporter](https://github.com/EdyJ/blender-to-unity-fbx-exporter)

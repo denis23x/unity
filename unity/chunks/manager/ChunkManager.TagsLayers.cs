@@ -5,9 +5,11 @@
 // Mirrors the ApplyNavmeshModifiers flow in ChunkManager.Navmesh.cs:
 // configs are evaluated in list order, the first matching prefix wins,
 // scenes are marked dirty but NOT saved (user owns persistence via
-// File → Save). The Tag/Layer values are picked from project-defined
-// entries via TagField / LayerField in the UI, so this step never creates
-// new tags or layers — only assigns existing ones.
+// File → Save). The walk is scoped to the _Geometry subtree only — the
+// user-owned _Logic root is never touched by these batch ops. The
+// Tag/Layer values are picked from project-defined entries via TagField /
+// LayerField in the UI, so this step never creates new tags or layers —
+// only assigns existing ones.
 
 using System.Collections.Generic;
 using System.Linq;
@@ -83,9 +85,14 @@ namespace ProjectName.EditorTools
                         (float)i / scenes.Count);
 
                     bool sceneDirty = false;
-                    foreach (var root in scene.GetRootGameObjects())
+                    var geometry = FindGeometryRoot(scene);
+                    if (geometry == null)
                     {
-                        foreach (var t in root.GetComponentsInChildren<Transform>(includeInactive: true))
+                        Debug.LogWarning($"[ChunkManager] {scene.name}: no '{GeometryRootName}' root, skipping.");
+                    }
+                    else
+                    {
+                        foreach (var t in geometry.GetComponentsInChildren<Transform>(includeInactive: true))
                         {
                             var go = t.gameObject;
                             var name = go.name;
@@ -149,9 +156,14 @@ namespace ProjectName.EditorTools
                         (float)i / scenes.Count);
 
                     bool sceneDirty = false;
-                    foreach (var root in scene.GetRootGameObjects())
+                    var geometry = FindGeometryRoot(scene);
+                    if (geometry == null)
                     {
-                        foreach (var t in root.GetComponentsInChildren<Transform>(includeInactive: true))
+                        Debug.LogWarning($"[ChunkManager] {scene.name}: no '{GeometryRootName}' root, skipping.");
+                    }
+                    else
+                    {
+                        foreach (var t in geometry.GetComponentsInChildren<Transform>(includeInactive: true))
                         {
                             var go = t.gameObject;
                             var name = go.name;

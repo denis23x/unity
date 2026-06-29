@@ -159,5 +159,16 @@ namespace ProjectName.EditorTools
             }
             return list;
         }
+
+        // Returns the top-level GameObject named GeometryRootName in `scene`,
+        // or null if it isn't present. Navmesh / Tags / Layers batch ops use
+        // this to scope their walks to the import-owned subtree and leave the
+        // user-owned _Logic root untouched.
+        static GameObject FindGeometryRoot(Scene scene)
+        {
+            foreach (var go in scene.GetRootGameObjects())
+                if (go.name == GeometryRootName) return go;
+            return null;
+        }
     }
 }

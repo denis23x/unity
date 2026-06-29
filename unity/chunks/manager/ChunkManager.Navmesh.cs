@@ -53,10 +53,12 @@ namespace ProjectName.EditorTools
         // ── Navmesh prefab pipeline ──────────────────────────────────────
         // CreateNavmeshPrefabs operates on chunk scenes the user has already
         // opened additively. For each chunk scene matching sceneNamePrefix it
-        // walks every immediate child of every root GameObject (i.e. each
-        // FBX `inst` produced by Import) and adds a NavmeshPrefab component.
-        // XZ size is the chunkSize (so neighbouring prefabs tile cleanly);
-        // Y size is taken from the parent scene's RecastGraph
+        // walks every immediate child of the _Geometry root (FBX prefab
+        // instance + any user-added decorations) and adds a NavmeshPrefab
+        // component. _Logic is the user-owned root and is intentionally
+        // skipped — none of its contents will ever receive a NavmeshPrefab
+        // from this step. XZ size is the chunkSize (so neighbouring prefabs
+        // tile cleanly); Y size is taken from the parent scene's RecastGraph
         // (forcedBoundsSize.y) so the navmesh covers the full vertical range
         // the graph was configured for. The parent scene is whichever open
         // scene carries the 'A*' GameObject; AstarPath.FindAstarPath()
@@ -112,11 +114,16 @@ namespace ProjectName.EditorTools
                         (float)i / scenes.Count);
 
                     bool sceneDirty = false;
-                    foreach (var root in scene.GetRootGameObjects())
+                    var geometry = FindGeometryRoot(scene);
+                    if (geometry == null)
                     {
-                        for (int c = 0; c < root.transform.childCount; c++)
+                        Debug.LogWarning($"[ChunkManager] {scene.name}: no '{GeometryRootName}' root, skipping.");
+                    }
+                    else
+                    {
+                        for (int c = 0; c < geometry.transform.childCount; c++)
                         {
-                            var inst = root.transform.GetChild(c).gameObject;
+                            var inst = geometry.transform.GetChild(c).gameObject;
                             var navmesh = inst.GetComponent<NavmeshPrefab>();
                             if (navmesh == null)
                             {
@@ -186,7 +193,8 @@ namespace ProjectName.EditorTools
 
         // ── Navmesh modifier pipeline ────────────────────────────────────
         // Walks every currently open chunk scene that matches sceneNamePrefix
-        // and recursively scans every GameObject under each root. For each
+        // and recursively scans the _Geometry subtree only (the _Logic root
+        // is the user-owned subtree and is intentionally skipped). For each
         // object whose name starts with a config's keyPrefix, attaches (or
         // reuses) a RecastNavmeshModifier and copies the config's fields onto
         // it. Configs are evaluated in list order and the first matching
@@ -229,9 +237,14 @@ namespace ProjectName.EditorTools
                         (float)i / scenes.Count);
 
                     bool sceneDirty = false;
-                    foreach (var root in scene.GetRootGameObjects())
+                    var geometry = FindGeometryRoot(scene);
+                    if (geometry == null)
                     {
-                        foreach (var t in root.GetComponentsInChildren<Transform>(includeInactive: true))
+                        Debug.LogWarning($"[ChunkManager] {scene.name}: no '{GeometryRootName}' root, skipping.");
+                    }
+                    else
+                    {
+                        foreach (var t in geometry.GetComponentsInChildren<Transform>(includeInactive: true))
                         {
                             var go = t.gameObject;
                             var name = go.name;

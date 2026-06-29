@@ -46,7 +46,7 @@
 //   * ChunkManager.Scenes.cs       — open/unload/remove/delete chunk scenes
 //   * ChunkManager.Navmesh.cs      — NavmeshPrefab + RecastNavmeshModifier
 //   * ChunkManager.TagsLayers.cs   — Tag / Layer bulk-assign by key prefix
-//   * ChunkManager.Import.cs       — FBX scan + per-chunk scene write + mesh bake
+//   * ChunkManager.Import.cs       — FBX scan + per-chunk scene write (ensure-instance, never deletes)
 //   * ChunkManager.Addressables.cs — Addressables group create/delete
 //
 // Menu: Tools → Chunks → Chunk Manager
@@ -64,6 +64,15 @@ namespace ProjectName.EditorTools
     public partial class ChunkManager : EditorWindow
     {
         const string PK = "ChunkManager.";
+
+        // Per-chunk scene layout — two root GameObjects. Import owns _Geometry
+        // (FBX prefab instance + auto-added MeshColliders + any user-added
+        // decorations); _Logic is reserved for hand-authored runtime logic and
+        // is never modified by any batch step. The Navmesh / Tags / Layers
+        // pipelines scope their walks to _Geometry so configs cannot reach
+        // anything under _Logic.
+        public const string GeometryRootName = "_Geometry";
+        public const string LogicRootName    = "_Logic";
 
         // Persisted settings
         string sourceFolder;
@@ -224,10 +233,11 @@ namespace ProjectName.EditorTools
                 v => { sceneNamePrefix = v; UpdateButtonStates(); });
 
             BindToggle(root, "add-mesh-collider", addMeshCollider,
-                "Attach a non-convex MeshCollider to every MeshFilter in the chunk after the " +
-                "bake step. sharedMesh references the baked mesh, so collision matches the " +
-                "visible geometry 1:1 and pivots around the same point as the renderer. " +
-                "Convex is not required because chunks are static environment (no Rigidbody).",
+                "Attach a non-convex MeshCollider to every MeshFilter under the freshly " +
+                "instantiated FBX prefab. Only runs on first import of each chunk — re-running " +
+                "Import on an existing scene leaves the connected prefab instance (and its " +
+                "colliders) alone. Convex is not required because chunks are static environment " +
+                "(no Rigidbody).",
                 v => { addMeshCollider = v; });
 
             // Chunk Navmesh Prefabs
