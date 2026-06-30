@@ -11,7 +11,7 @@ The pipeline
 2. Add Blosm Blender Add-on [Github](https://github.com/solido3d/blender-osm)
     - Open your downloaded data with add-on
 3. Use `chunks_export.py` script in Blender to export chunks
-4. Copy chunks **manager-no-navmesh** folder into your Unity project `Assets/Editor`
+4. Copy chunks **manager** folder into your Unity project `Assets/Editor`
     - Open it in Unity menu Tools → Chunks → Chunk Manager
 5. Configure paths in Chunk Manager and Import Files
 6. Open Addressables tab and Create Addressable
@@ -21,9 +21,9 @@ The pipeline
 8. Save & Play
 
 > [!NOTE]
-> Use **manager** if you have a [A* Pathfinding Project](https://arongranberg.com/astar/)\
-> Use **manager-no-navmesh** if you don’t
+> Use **manager** if you have a [A* Pathfinding Project](https://arongranberg.com/astar/)
 
 ## Awesome Links
 
 - [Blender To Unity FBX Exporter](https://github.com/EdyJ/blender-to-unity-fbx-exporter)
+- [VContainer](https://github.com/hadashiA/VContainer)
