@@ -10,16 +10,20 @@
 //       <FBX prefab instance>      ← PrefabUtility.InstantiatePrefab, NOT unpacked
 //       (anything else the user adds here is preserved across re-imports)
 //     _Logic     (chunk world centre, identity rotation)
-//       (user-owned subtree; Import never touches it)
+//                (+ ChunkLifetimeScope + ChunkInstaller for the DI pipeline)
+//       (user-owned subtree; Import never touches contents, only ensures the
+//        two scope components exist on the root itself)
 //
 // Ensure-instance semantics:
 //   * No scene file on disk → create scene, spawn _Geometry + _Logic, instantiate
-//     the FBX under _Geometry, add MeshColliders (if enabled), save.
+//     the FBX under _Geometry, add MeshColliders (if enabled), attach the DI
+//     scope components to _Logic, save.
 //   * Scene already on disk → open it (additive), make sure _Geometry / _Logic
-//     exist, and add the FBX prefab instance only if no connected instance of
-//     that FBX is already under _Geometry. Never delete anything, never reset
-//     transforms on existing nodes. Existing FBX instances pick up Blender edits
-//     automatically through the prefab → asset link on Unity's FBX reimport.
+//     exist, ensure the DI scope components are on _Logic, and add the FBX
+//     prefab instance only if no connected instance of that FBX is already
+//     under _Geometry. Never delete anything, never reset transforms on existing
+//     nodes. Existing FBX instances pick up Blender edits automatically through
+//     the prefab → asset link on Unity's FBX reimport.
 //
 // ModelImporter side: bakeAxisConversion is forced ON so Unity bakes the
 // Blender→Unity axis conversion into the mesh data and the FBX root lands
@@ -32,6 +36,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using ProjectName.World;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -183,7 +188,12 @@ namespace ProjectName.EditorTools
             // subsequent imports we only look them up — never reposition or
             // recreate — so any manual transform tweaks the user made survive.
             var geometryGO = FindOrCreateRoot(scene, GeometryRootName, rootPos);
-            FindOrCreateRoot(scene, LogicRootName, rootPos);
+            var logicGO    = FindOrCreateRoot(scene, LogicRootName, rootPos);
+
+            // Ensure the DI scope lives on _Logic. AddComponent only fires when
+            // the component is missing, so re-imports don't duplicate and
+            // inspector-set fields on existing components survive.
+            EnsureLogicScopeComponents(logicGO);
 
             // Force bakeAxisConversion=true so the FBX root lands identity
             // in Unity (Blender's use_space_transform export otherwise leaves
@@ -284,6 +294,18 @@ namespace ProjectName.EditorTools
                 if (AssetDatabase.GetAssetPath(src) == fbxAssetPath) return true;
             }
             return false;
+        }
+
+        // Ensures the DI runtime components (ChunkLifetimeScope + ChunkInstaller)
+        // sit on the _Logic root. Idempotent — never removes, never resets fields.
+        // Consumers who don't use the DI pipeline can strip these two checks;
+        // it's a soft feature.
+        static void EnsureLogicScopeComponents(GameObject logicGO)
+        {
+            if (logicGO.GetComponent<ChunkLifetimeScope>() == null)
+                logicGO.AddComponent<ChunkLifetimeScope>();
+            if (logicGO.GetComponent<ChunkInstaller>() == null)
+                logicGO.AddComponent<ChunkInstaller>();
         }
 
         // Looks up a top-level GameObject named `name` in `scene`; creates it

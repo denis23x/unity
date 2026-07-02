@@ -11,17 +11,31 @@ The pipeline
 2. Add Blosm Blender Add-on [Github](https://github.com/solido3d/blender-osm)
     - Open your downloaded data with add-on
 3. Use `chunks_export.py` script in Blender to export chunks
-4. Copy chunks **manager** folder into your Unity project `Assets/Editor`
+4. Install [VContainer](https://github.com/hadashiA/VContainer) via UPM — the
+   runtime uses it for chunk-scope DI
+5. Copy runtime folders into your Unity project `Assets/Scripts/`:
+    - `unity/chunks/core/` — shared contracts
+    - `unity/chunks/bootstrap/` — RootLifetimeScope, PlayerService, ChunkRegistry, ChunkRegistryBinder
+    - `unity/chunks/scope/` — ChunkLifetimeScope, ChunkInstaller, PatrolFacet
+    - `unity/chunks/streamer/` — ChunkStreamer component (DI-free, self-contained)
+6. Copy chunks **manager** folder into your Unity project `Assets/Editor`
     - Open it in Unity menu Tools → Chunks → Chunk Manager
-5. Configure paths in Chunk Manager and Import Files
-6. Open Addressables tab and Create Addressable
-7. Copy chunks streamer folder into your Unity project `Assets/Scripts`
-    - Create EmptyObject on Scene and add `ChunkStreamer` component
-    - Set Target parameter as your Player Controller
-8. Save & Play
+7. Configure paths in Chunk Manager and Import Files (this also attaches the DI
+   scope components to each chunk's `_Logic` root automatically)
+8. Open Addressables tab and Create Addressable
+9. In your bootstrap scene:
+    - Add the `PlayerService` component to your Player GameObject
+    - Create an EmptyObject and add the `ChunkStreamer` component; set Target
+      parameter as your Player Controller
+    - Create an EmptyObject and add the `RootLifetimeScope` component (no
+      inspector wiring — it discovers `PlayerService` and `ChunkStreamer` in
+      the same scene at boot)
+10. Save & Play
 
 > [!NOTE]
-> Use **manager** if you have a [A* Pathfinding Project](https://arongranberg.com/astar/)
+> The pipeline requires [A* Pathfinding Project](https://arongranberg.com/astar/)
+> for navmesh, and [VContainer](https://github.com/hadashiA/VContainer) for the
+> runtime DI graph.
 
 ## Awesome Links
 

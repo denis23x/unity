@@ -9,6 +9,14 @@ soon will see) always is.
 This is the piece of the pipeline that turns a folder full of
 `Chunk_XX_YY.unity` scenes into a seamless, streamed open world.
 
+The streamer itself is **DI-free and self-contained** — it has no VContainer
+dependency and nothing is injected into it. The optional DI layer
+(`unity/chunks/bootstrap/` + `unity/chunks/scope/`) attaches from the
+outside: a root-scope `ChunkRegistryBinder` subscribes to the two public
+events below and publishes each loaded chunk's `IChunkContext` into a
+global `IChunkRegistry`, so root-scope services (spawners, quest system,
+minimap) can react to chunks without singletons or `FindObjectsOfType`.
+
 This README explains **what it does and why** in plain language, with no
 assumed Unity background.
 
@@ -164,6 +172,63 @@ near?" gating used everywhere else.
 There's also `EnsureChunkLoadedCoroutine(coord)` for the coroutine
 crowd.
 
+If you need to **read facets** from the destination chunk (spawn points,
+quest data, checkpoint transform, …), use
+`ChunkRegistryBinder.EnsureChunkContextReady(coord)` from the DI layer
+instead (in `unity/chunks/bootstrap/`). It returns `Task<IChunkContext>`
+that resolves once the chunk is loaded **and** its context is in the
+registry, or `null` for a missing/failed/geometry-only chunk:
+
+```csharp
+class FastTravelService
+{
+    [Inject] ChunkRegistryBinder _chunks;
+    [Inject] IPlayerService _player;
+
+    public async void FastTravel(ChunkCoord dest)
+    {
+        var ctx = await _chunks.EnsureChunkContextReady(dest);
+        if (ctx == null) return;                 // no such chunk / load failed
+        if (ctx.Resolver.TryResolve<IPatrolFacet>(out var patrol))
+            _player.Transform.position = patrol.PointA.position;
+    }
+}
+```
+
+## DI integration: consuming `IChunkRegistry`
+
+Root-scope services subscribe once and react to every chunk that loads or
+unloads, including chunks already loaded before they subscribed (`onReady`
+replays on subscribe):
+
+```csharp
+class NpcSpawnerService : IStartable, IDisposable
+{
+    readonly IChunkRegistry _registry;
+    IDisposable _subscription;
+
+    public NpcSpawnerService(IChunkRegistry registry) { _registry = registry; }
+
+    public void Start()
+        => _subscription = _registry.Subscribe(OnChunkReady, OnChunkGone);
+
+    public void Dispose() => _subscription?.Dispose();
+
+    void OnChunkReady(ChunkCoord c, IChunkContext ctx)
+    {
+        if (ctx.Resolver.TryResolve<IPatrolFacet>(out var patrol))
+            SpawnWolfOn(patrol);                 // your gameplay code
+    }
+
+    void OnChunkGone(ChunkCoord c) { /* scene unload destroys the wolves */ }
+}
+```
+
+Chunks declare what they contain via **facets**: drop a facet component
+(e.g. `PatrolFacet`) anywhere under `_Logic`, and the chunk's
+`ChunkLifetimeScope` registers it at load. Chunks without a facet simply
+don't register it — `TryResolve` is the consumer-side check.
+
 ## Persistence hooks
 
 Two events fire so other systems can save/restore per-chunk state:
@@ -174,6 +239,15 @@ Two events fire so other systems can save/restore per-chunk state:
 - `OnBeforeChunkUnload(coord, scene)` — the very last moment before the
   scene's GameObjects are destroyed. Snapshot whatever needs to survive
   the unload.
+
+These are also the attachment points for the DI layer: `ChunkRegistryBinder`
+(in `unity/chunks/bootstrap/`) subscribes to both at startup and mirrors
+them into `IChunkRegistry.Register` / `Unregister`. Because it subscribes
+first, registry consumers hear about an unload before any later-subscribed
+persistence handler runs — and always while the chunk's GameObjects are
+still alive. Most gameplay code should consume `IChunkRegistry` (typed
+contexts, replay for late subscribers) rather than these raw events; the
+raw events remain for code that needs the `Scene` handle itself.
 
 ## Gizmo visualization
 
@@ -268,7 +342,15 @@ to fit your scene.
 
 - Editor-side import pipeline: `unity/chunks/manager/` — turns Blender's
   FBX chunks into the `Chunk_XX_YY.unity` scenes that this component
-  streams, and registers them as Addressables.
+  streams, registers them as Addressables, and attaches the DI scope
+  components to each chunk's `_Logic` root.
+- Bootstrap wiring: `unity/chunks/bootstrap/` — `RootLifetimeScope`,
+  `PlayerService`, `ChunkRegistry`, `ChunkRegistryBinder`. Set up once,
+  in the bootstrap scene.
+- Chunk-scope components: `unity/chunks/scope/` — `ChunkLifetimeScope`
+  (parents itself to the root scope via `FindParent`), `ChunkInstaller`.
+- Shared contracts: `unity/chunks/core/` — `IChunkContext`,
+  `IChunkRegistry`, `IPlayerService`, `ChunkCoordParser`.
 - Blender-side export script: `blender/chunks/` — produces the FBX files
   that the manager imports.
 - See the project root `README.md` for the full pipeline overview, from

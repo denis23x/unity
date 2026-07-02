@@ -48,14 +48,19 @@ top-level objects:
 Chunk_05_03.unity
 ├── _Geometry            ← managed by ChunkManager (FBX prefab + colliders + navmesh + tags + layers)
 │   └── 05_03 (FBX prefab instance, kept connected to the .fbx asset)
-└── _Logic               ← yours, never touched by any button in this window
+└── _Logic               ← yours; Import only touches the root's own components
+    ├── ChunkLifetimeScope  (VContainer scope for the chunk — added by Import)
+    ├── ChunkInstaller      (IChunkContext, coord parsed from scene name — added by Import)
     └── (whatever runtime logic you want: enemies, NPCs, triggers, …)
 ```
 
 The split exists so you can put hand-authored logic into a chunk scene
 without worrying that "Import" or "Apply Navmesh Modifiers" will stomp
 on it. Every batch operation in this window walks **only** the
-`_Geometry` subtree. `_Logic` is yours forever.
+`_Geometry` subtree. Import touches `_Logic` in exactly one narrow way:
+if `ChunkLifetimeScope` or `ChunkInstaller` are missing from the root
+GameObject itself, it adds them. Everything under `_Logic` — child
+GameObjects, components, inspector references — is yours forever.
 
 ## The full pipeline at a glance
 
@@ -85,17 +90,22 @@ two-root layout shown above.
 The key behavior is **ensure-instance**, not "rebuild":
 
 - If the scene doesn't exist on disk → create it from scratch with
-  `_Geometry`, `_Logic`, the FBX as a connected prefab instance, and
-  (if enabled) MeshColliders.
+  `_Geometry`, `_Logic`, `ChunkLifetimeScope` + `ChunkInstaller` on
+  `_Logic`, the FBX as a connected prefab instance under `_Geometry`,
+  and (if enabled) MeshColliders.
 - If the scene already exists → open it, make sure both roots are
-  present, and add the FBX prefab instance **only if no connected
-  instance of that same FBX is already under `_Geometry`**.
+  present, make sure `_Logic` has the two DI scope components, and add
+  the FBX prefab instance **only if no connected instance of that same
+  FBX is already under `_Geometry`**.
 
 What this protects against:
 
 - **Re-importing won't duplicate chunks** in a scene.
 - **Re-importing won't reset transforms** the user manually adjusted.
 - **Re-importing won't stomp on prefab overrides** the user applied.
+- **Re-importing won't reset DI scope inspector fields.** AddComponent
+  only fires when the component is missing — existing scope fields
+  survive.
 - **When you re-export the Blender FBX, existing chunks pick up the new
   geometry automatically** through Unity's prefab → FBX reimport link —
   you don't need to click anything.
@@ -151,8 +161,7 @@ they only act on scenes currently loaded in the hierarchy.
 
 **Buttons:** Create Navmesh Prefab, Delete Tiles
 
-> Requires [A* Pathfinding Pro](https://arongranberg.com/astar/). For the
-> NavMesh-free variant, see the `manager-no-navmesh/` folder.
+> Requires [A* Pathfinding Pro](https://arongranberg.com/astar/).
 
 For every chunk scene currently loaded, walks the immediate children of
 `_Geometry` and attaches an `NavmeshPrefab` component to each one. The
@@ -307,8 +316,14 @@ in list order — first match wins.
 - Runtime streaming: `unity/chunks/streamer/` — the `ChunkStreamer`
   component that loads / unloads chunk scenes at runtime by Addressables
   address, using the format this window registers.
+- Chunk-scope components: `unity/chunks/scope/` — `ChunkLifetimeScope`,
+  `ChunkInstaller`, and `PatrolFacet` (reference facet). Import references
+  these runtime types when attaching the scope components to `_Logic`, so
+  the folder must be copied into `Assets/Scripts/` before running Import.
+- Bootstrap wiring: `unity/chunks/bootstrap/` — `RootLifetimeScope`,
+  `PlayerService`, `ChunkRegistry`. Set up once, in the bootstrap scene.
+- Shared contracts: `unity/chunks/core/` — the interfaces everything
+  else depends on.
 - Blender export: `blender/chunks/` — the script that produces the
   `XX_YY.fbx` files this window imports.
 - See the project root `README.md` for the full pipeline overview.
-- Companion folder `manager-no-navmesh/` — same window without A*
-  Pathfinding integration, for projects that don't use it.
